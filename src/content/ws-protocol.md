@@ -90,8 +90,7 @@
   "data": {
     "content": "帮我写一个函数",
     "session_id": "ws::sess_xxx",
-    "attachments": [...],
-    "skill": "octo-im-github"
+    "attachments": [...]
   },
   "metadata": {
     "model": "gpt-4o",
@@ -310,7 +309,13 @@
 
 #### tool_cancel_requested / tool_cancelled / tool_timed_out
 
-工具取消链路中的状态事件，用于标记取消请求、已取消、已超时。结构同 tool_call，附加状态信息。
+工具取消/超时状态事件。与 `tool_call` 同结构，标记不同状态。当前前端仅在回放历史时持久化，**不渲染**（`applyEvent` 无对应 case 分支）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | string | 关联的 tool_call ID |
+| `name` | string | 工具名称 |
+| `status` | string | `"cancel_requested"` / `"cancelled"` / `"timed_out"` |
 
 #### reasoning — LLM 思考文本片段
 
@@ -400,12 +405,24 @@
 
 #### done — 响应结束
 
+**成功**：
 ```json
 {
   "type": "agent_event",
   "data": {
     "type": "done",
     "data": { "success": true }
+  }
+}
+```
+
+**失败**（Agent 异常退出）：
+```json
+{
+  "type": "agent_event",
+  "data": {
+    "type": "done",
+    "data": { "success": false, "reason": "error" }
   }
 }
 ```
@@ -557,5 +574,56 @@
 
 **后端归一化（`_content_to_text`）**：
 - string → 直接使用
-- array → 遍历 parts，text 部分拼接，skill 部分转为 XML 标注
+- array → 遍历 parts，text 部分用 `"\n".join()` 拼接，skill 部分转为 XML 标注
 - 最终传给 LLM 的是纯文本
+
+---
+
+## 补充说明
+
+### USER_INPUT（大写）— 历史回放事件
+
+`USER_INPUT` 仅出现在 HTTP API `GET /api/sessions/:id/messages` 返回的历史记录中，**不会**通过 WebSocket 实时下发。前端 `applyEvent` 有独立的 `case "USER_INPUT"` 分支处理，与实时 `user_input` echo 区分。
+
+### external_message 的 LLM 转换
+
+前端渲染为 `external = true` 的消息。**后端 `to_openai_messages`** 在重建 LLM 历史时转换为：
+
+```
+[来自 <channel>::<session> 的消息] <content>
+```
+
+格式为 `role: "assistant", name: "<src>"`。
+
+### attach / detach — 无确认响应
+
+这两个帧是 **fire-and-forget**。后端收到后直接 `return`，不返回任何确认帧。前端无需等待响应。
+
+### context_compact — 上下文压缩
+
+`context_compact_start/ done / failed` 事件由插件（`context_compact.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用压缩后的 summary 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
+
+### HTTP API 路由
+
+后端 FastAPI 同时挂载了 `/api/*` HTTP 路由（`ws_channel.py:117`）：
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| GET | `/api/config` | 读取 `~/.ftre/config.json` |
+| POST | `/api/sessions` | 创建 session |
+| GET | `/api/sessions` | 列出 sessions |
+| GET | `/api/sessions/:id` | 获取 session 详情 |
+| PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
+| GET | `/api/sessions/:id/messages` | 分页拉取历史消息（即 `USER_INPUT` 的来源） |
+| DELETE | `/api/sessions/:id` | 删除 session |
+| GET | `/api/workspaces` | 列出工作区 |
+| GET | `/api/skills` | Skill CRUD |
+| GET | `/api/cron/jobs` | Cron 任务 CRUD |
+
+`fetchSessionMessagesPage` 分页参数：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `limit` | int | 每页条数（默认 200） |
+| `before_ts` | float | 拉取早于此时间戳的消息 |
+| `after_ts` | float | 拉取晚于此时间戳的消息（增量更新用） |
