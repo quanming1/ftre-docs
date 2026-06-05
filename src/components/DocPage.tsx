@@ -165,13 +165,13 @@ function DocToc({ items, activeId }: { items: TocItem[]; activeId: string }) {
   return (
     <aside className="doc-toc hidden xl:block">
       <div className="sticky top-[112px] max-h-[calc(100vh-128px)] overflow-y-auto border-l border-border-subtle pl-5">
-        <div className="mb-3 text-[12px] font-semibold text-t-primary">本页目录</div>
-        <nav className="space-y-1">
+        <div className="mb-4 text-[13px] font-semibold text-t-primary">本页目录</div>
+        <nav className="space-y-2">
           {items.map((item) => (
             <a
               key={item.id}
               href={`#${item.id}`}
-              className={`block truncate border-l-2 py-0 text-[12px] leading-4 transition-colors hover:text-neon ${
+              className={`block truncate border-l-2 py-0.5 text-[13px] leading-5 transition-colors hover:text-neon ${
                 activeId === item.id
                   ? 'border-neon text-t-primary font-medium'
                   : 'border-transparent text-t-muted'
