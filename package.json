@@ -15,7 +15,8 @@
     "react-syntax-highlighter": "^15.6.1",
     "react-router-dom": "^6.28.0",
     "gray-matter": "^4.0.3",
-    "lucide-react": "^0.460.0"
+    "lucide-react": "^0.460.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

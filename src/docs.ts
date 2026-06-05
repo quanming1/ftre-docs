@@ -5,10 +5,10 @@ export interface DocEntry {
 }
 
 // 使用 import.meta.glob 让 Vite 在构建时就能静态分析所有 .md 文件
-const mdModules = import.meta.glob<string>('../content/*.md', { query: '?raw', import: 'default', eager: true })
+const mdModules = import.meta.glob<string>('./content/*.md', { query: '?raw', import: 'default', eager: true })
 
 function getDocLoader(path: string): (() => Promise<{ default: string }>) {
-  const key = `../content/${path}.md`
+  const key = `./content/${path}.md`
   const loader = mdModules[key]
   return () => loader ? Promise.resolve({ default: loader }) : Promise.resolve({ default: `# ${path}\n\n内容待补充。` })
 }
