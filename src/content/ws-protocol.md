@@ -308,13 +308,12 @@
 
 #### tool_cancel_requested / tool_cancelled / tool_timed_out
 
-工具取消/超时状态事件。与 `tool_call` 同结构，标记不同状态。当前前端仅在回放历史时持久化，**不渲染**（`applyEvent` 无对应 case 分支）。
+工具取消/超时状态事件。**后端持久化**（在 `PERSISTENT_EVENTS` 中），会存入 DB 历史，但**前端 `applyEvent` 无对应 case 分支，不做任何渲染处理**。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
 | `id` | string | 关联的 tool_call ID |
 | `name` | string | 工具名称 |
-| `status` | string | `"cancel_requested"` / `"cancelled"` / `"timed_out"` |
 
 #### reasoning — LLM 思考文本片段
 
@@ -434,7 +433,49 @@
 
 #### context_compact_start / context_compact_done / context_compact_failed
 
-上下文压缩事件，插入 `compact` 状态消息到消息列表。
+上下文压缩实时事件，插入/更新 `compact` 状态消息到消息列表。
+
+**context_compact_start** data：
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `tokens` | number \| undefined | 压缩前的 token 数（可选） |
+
+**context_compact_done** data：
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `tokens_before` | number \| undefined | 压缩前的 token 数（可选） |
+| `summary` | string \| undefined | 压缩后的摘要预览（可选） |
+
+**context_compact_failed** data：
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `reason` | string | 失败原因描述 |
+
+**前端处理**：
+- `context_compact_start`：push 一条 `compact.status = "running"` 的 system 消息
+- `context_compact_done`：找最后一条 `running` 的 compact 消息，更新为 `status = "done"`，写入 `tokensBefore` 和 `summaryPreview`
+- `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
+
+#### context_compact — 历史回放专用
+
+```json
+{
+  "type": "agent_event",
+  "data": {
+    "type": "context_compact",
+    "data": { "summary": "..." }
+  }
+}
+```
+
+**仅出现在历史回放（HTTP API 历史消息流）中**，对应后端 `context_compact.py` 插件写入 DB 的持久化事件。前端 `applyEvent` 的 `case "context_compact"` 分支处理：插入一条已完成（`status = "done"`）的 compact 分隔气泡。与实时的三段式事件（`_start / _done / _failed`）不同，此事件是单步持久化形态。
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `summary` | string | 压缩摘要内容 |
 
 #### external_message — 跨 session 消息注入
 

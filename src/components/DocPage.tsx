@@ -106,8 +106,8 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   }
 
   return (
-    <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_220px]">
-      <article className="min-w-0">
+    <div className="grid gap-10 xl:grid-cols-[minmax(0,688px)_260px]">
+      <article className="min-w-0 max-w-[688px]">
         <div className="mb-7">
           <div className="mb-3 flex items-center gap-2 text-[12px] text-t-ghost">
             <FileText size={14} strokeWidth={1.8} />
@@ -151,11 +151,11 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
             <button
               key={item.id}
               onClick={() => onItemClick(item.id)}
-              className={`block w-full truncate border-l-2 py-0.5 text-left text-[13px] leading-5 transition-colors hover:text-neon ${
+              className={`block w-full truncate py-0.5 text-left text-[13px] leading-5 transition-colors hover:text-neon ${
                 activeId === item.id
-                  ? 'border-neon text-t-primary font-medium'
-                  : 'border-transparent text-t-muted'
-              } ${item.level === 3 ? 'pl-7' : 'pl-3'}`}
+                  ? 'text-neon font-semibold'
+                  : 'text-t-muted'
+              } ${item.level === 3 ? 'pl-4' : ''}`}
             >
               {item.text}
             </button>
