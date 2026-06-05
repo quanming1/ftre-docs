@@ -22,6 +22,7 @@ export const docs: DocEntry[] = [
   // 协议
   { path: 'ws-protocol', title: 'WebSocket 协议', category: '协议' },
   { path: 'bus-message', title: 'Bus 消息协议', category: '协议' },
+  { path: 'agent-events', title: 'Agent 事件协议', category: '协议' },
 ]
 
 // 导出 loader map 给 DocPage 使用
