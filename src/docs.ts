@@ -21,8 +21,6 @@ export const docs: DocEntry[] = [
 
   // 协议
   { path: 'ws-protocol', title: 'WebSocket 协议', category: '协议' },
-  { path: 'frame-format', title: '帧格式规范', category: '协议' },
-  { path: 'attachments', title: '附件传输', category: '协议' },
   { path: 'bus-message', title: 'Bus 消息协议', category: '协议' },
 
   // 后端
