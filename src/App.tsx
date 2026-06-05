@@ -25,6 +25,7 @@ export default function App() {
         <Sidebar />
         <main className="min-w-0 flex-1 bg-surface lg:overflow-y-auto">
           <div className="mx-auto w-full max-w-[1040px] px-5 py-6 sm:px-8 lg:px-10 lg:py-7">
+            <div key={location.pathname} className="doc-page-transition">
             <Routes>
               <Route path="/" element={<Navigate to="/docs/overview" replace />} />
               {docs.map((doc) => (
@@ -35,6 +36,7 @@ export default function App() {
                 />
               ))}
             </Routes>
+            </div>
           </div>
         </main>
       </div>
