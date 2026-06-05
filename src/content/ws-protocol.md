@@ -103,10 +103,9 @@
 
 | data 字段 | 类型 | 必填 | 说明 |
 |-----------|------|:---:|------|
-| `content` | string \| array | 是 | 消息内容（见下方 content 协议） |
+| `content` | string \| array | 是 | 消息内容（见下方 content 协议）。v2 格式中 `skill` 作为 part 嵌入数组 |
 | `session_id` | string | 是 | 目标 session ID |
 | `attachments` | array | 否 | 图片附件列表 |
-| `skill` | string | 否 | 用户选中的 Skill 名称 |
 
 **metadata 字段**（前端自由填充，透传到 Agent，常用）：
 
