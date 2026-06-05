@@ -193,7 +193,7 @@
 ```
 
 **用途**：
-1. **本地去重**：前端自己发的消息已有本地占位（同 `id`），echo 跳过渲染，仅推进 `isBusy` 状态
+1. **本地去重**：前端自己发的消息已有本地占位（同 `id`），echo 跳过渲染，但仍会设置 `isBusy = true`、清空 `error` 和 `retryState`（一轮对话开始的统一信号）
 2. **跨 session 唤起**：当 `send_message` 工具触发远端 session 时，目标前端没有本地占位，echo 负责渲染用户气泡
 3. **多端同步**：其他客户端也能看到用户消息
 
@@ -216,7 +216,7 @@
 **前端处理**：
 - 无 streaming assistant 时自动创建一条空消息
 - 文本追加到 `parts[]` 末尾的流式 text part
-- `isBusy = true`
+- 清除重试横幅（`retryState = null`，若存在）
 
 #### message_complete — LLM 一轮文本完成
 
@@ -641,7 +641,7 @@
 
 ### context_compact — 上下文压缩
 
-`context_compact_start/ done / failed` 事件由插件（`context_compact.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用压缩后的 summary 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
+`context_compact_start / done / failed` 事件由插件（`context_compact.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用压缩后的 summary 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
 
 ### HTTP API 路由
 

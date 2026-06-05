@@ -24,7 +24,7 @@ export default function App() {
       <div className="lg:flex lg:h-[calc(100vh-80px)] lg:overflow-hidden">
         <Sidebar />
         <main id="ftre-docs-main" className="min-w-0 flex-1 bg-surface lg:overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1320px] px-5 py-6 sm:px-8 lg:px-10 lg:py-7">
+          <div className="mx-auto w-full max-w-[1100px] px-5 py-6 sm:px-8 lg:px-10 lg:py-7">
             <div key={location.pathname} className="doc-page-transition">
             <Routes>
               <Route path="/" element={<Navigate to="/docs/overview" replace />} />

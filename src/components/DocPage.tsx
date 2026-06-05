@@ -106,8 +106,8 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   }
 
   return (
-    <div className="grid gap-10 xl:grid-cols-[minmax(0,688px)_260px]">
-      <article className="min-w-0 max-w-[688px]">
+    <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_240px]">
+      <article className="min-w-0 max-w-[688px] w-full">
         <div className="mb-7">
           <div className="mb-3 flex items-center gap-2 text-[12px] text-t-ghost">
             <FileText size={14} strokeWidth={1.8} />
