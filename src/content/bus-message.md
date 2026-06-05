@@ -83,8 +83,21 @@ BusMessage 由以下 Channel 的 `receive()` 方法构造：
 - **inbound**（`type: "user_input"` / `"cancel"`）→ `AgentLoop._consume()` 消费
 - **outbound**（`type: "agent_event"`）→ `ChannelManager._dispatch_loop()` 按 `to_channel` 分发到对应 Channel
 
-## metadata 常用字段
+## metadata 字段
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `frame_id` | string | 客户端帧 ID，用于 echo 去重。由 WS Channel 从上行帧的 `id` 写入 |
+### 上行（客户端设置）
+
+| 字段 | 类型 | 来源 | 说明 |
+|------|------|------|------|
+| `model` | string | `ModelSelector` | 当前选中的 LLM 模型（如 `"gpt-4o"`） |
+| `provider` | string | `ModelSelector` | 当前选中的 Provider 名称（如 `"openai"`） |
+| `agent_id` | string | 前端 | Agent ID，默认 `"code_agent"` |
+| `session_id` | string | 前端 | 当前 session ID |
+
+### 下行（后端填充）
+
+| 字段 | 类型 | 来源 | 说明 |
+|------|------|------|------|
+| `channel_id` | string | `ws_channel.send()` | 来源 Channel ID（`"ws"`） |
+| `session_id` | string | `ws_channel.send()` | 所属 session ID |
+| `frame_id` | string | `ws_channel._on_message()` | 客户端上行帧 `id`，echo 回传给前端去重 |
