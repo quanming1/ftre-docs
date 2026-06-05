@@ -23,6 +23,11 @@ export const docs: DocEntry[] = [
   { path: 'ws-protocol', title: 'WebSocket 协议', category: '协议' },
   { path: 'bus-message', title: 'Bus 消息协议', category: '协议' },
   { path: 'agent-events', title: 'Agent 事件协议', category: '协议' },
+
+  // 插件
+  { path: 'plugin-overview', title: '插件概述', category: '插件' },
+  { path: 'plugin-api', title: 'Plugin API 参考', category: '插件' },
+  { path: 'plugin-hooks', title: 'Hook 挂点与上下文', category: '插件' },
 ]
 
 // 导出 loader map 给 DocPage 使用

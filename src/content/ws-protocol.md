@@ -270,7 +270,7 @@
     "type": "tool_call_streaming",
     "data": {
       "tool_calls": [
-        { "id": "call_abc123", "name": "bash", "arguments_delta": "{\"com" }
+        { "index": 0, "id": "call_abc123", "name": "bash", "arguments_delta": "{\"com" }
       ]
     }
   }
@@ -302,6 +302,9 @@
 | `name` | string | 工具名称 |
 | `result` | string | 执行结果 |
 | `error` | string \| null | 非 null 表示执行失败 |
+| `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
+| `error_code` | string \| null | 错误码（如 `"cancelled"`, `"timed_out"`, `"parse_error"`） |
+| `metadata` | object | 工具附加元数据（由工具实现传入，可选） |
 
 **前端处理**：
 - 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`）
@@ -314,6 +317,10 @@
 |----------------|------|------|
 | `id` | string | 关联的 tool_call ID |
 | `name` | string | 工具名称 |
+| `reason` | string | 取消/超时原因（如 `"user_cancelled"`, `"timed_out"`） |
+| `status` | string | 状态：`"cancelling"` / `"cancelled"` / `"timed_out"` |
+| `error_code` | string \| null | 错误码 |
+| `result_status` | string \| null | 最终结果状态（如 `"cancelled"`, `"timed_out"`） |
 
 #### reasoning — LLM 思考文本片段
 
@@ -331,7 +338,17 @@
 
 #### reasoning_complete — 思考文本完成
 
-与 `message_complete` 对应，封口 reasoning part。
+```json
+{
+  "type": "agent_event",
+  "data": {
+    "type": "reasoning_complete",
+    "data": { "content": "用户想要一个函数来计算斐波那契数列..." }
+  }
+}
+```
+
+与 `message_complete` 对应，封口 reasoning part。`data.data.content` 为完整思考文本。
 
 #### usage_update — Token 用量更新
 
@@ -388,6 +405,7 @@
   "data": {
     "type": "retry",
     "data": {
+      "code": "network",
       "attempt": 1,
       "max_attempts": 5,
       "message": "Retrying..."
@@ -409,7 +427,7 @@
   "type": "agent_event",
   "data": {
     "type": "done",
-    "data": { "success": true }
+    "data": { "success": true, "reason": "completed" }
   }
 }
 ```
