@@ -16,8 +16,8 @@ export default function Sidebar() {
       <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-3 pr-1">
         {Object.entries(groups).map(([category, items]) => (
           <section key={category}>
-            <div className="flex w-full items-center rounded px-2 py-1.5 text-left text-t-muted">
-              <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{category}</span>
+            <div className="flex w-full items-center rounded px-2 py-1 text-left text-t-muted">
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{category}</span>
             </div>
 
             <div className="mt-1 space-y-px">
@@ -27,13 +27,13 @@ export default function Sidebar() {
                   <Link
                     key={doc.path}
                     to={`/docs/${doc.path}`}
-                    className={`flex h-9 items-center rounded-full pr-3 text-[13.5px] transition-colors ${
+                    className={`flex h-7 items-center rounded-full pr-3 text-[13px] transition-colors ${
                       active
                         ? 'bg-active-doc font-medium text-t-primary hover:bg-active-doc'
                         : 'text-t-secondary hover:bg-hover hover:text-t-primary'
                     }`}
                   >
-                    <span className="w-[34px] shrink-0" />
+                    <span className="w-6 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">{doc.title}</span>
                   </Link>
                 )
