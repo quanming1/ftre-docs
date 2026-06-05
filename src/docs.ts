@@ -22,19 +22,6 @@ export const docs: DocEntry[] = [
   // 协议
   { path: 'ws-protocol', title: 'WebSocket 协议', category: '协议' },
   { path: 'bus-message', title: 'Bus 消息协议', category: '协议' },
-
-  // 后端
-  { path: 'backend-entry', title: '启动流程', category: '后端' },
-  { path: 'channel-system', title: 'Channel 系统', category: '后端' },
-  { path: 'agent-loop', title: 'Agent 循环', category: '后端' },
-  { path: 'tool-system', title: 'Tool 系统', category: '后端' },
-  { path: 'plugin-system', title: 'Plugin 系统', category: '后端' },
-  { path: 'session-manager', title: 'Session 管理', category: '后端' },
-
-  // Skill
-  { path: 'skill-overview', title: 'Skill 概述', category: 'Skill' },
-  { path: 'skill-create', title: '创建 Skill', category: 'Skill' },
-  { path: 'skill-usage', title: 'Skill 使用与加载', category: 'Skill' },
 ]
 
 // 导出 loader map 给 DocPage 使用
