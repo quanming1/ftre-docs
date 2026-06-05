@@ -50,15 +50,17 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   // 滚动监听 — 高亮当前可视标题
   useEffect(() => {
     if (toc.length === 0) return
-    const el = document.getElementById("ftre-docs-main")
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-        if (visible[0]?.target.id) setActiveId(visible[0].target.id)
+        // 找第一个进入视口的标题作为 active
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setActiveId(entry.target.id)
+            break
+          }
+        }
       },
-      { root: el, rootMargin: "-80px 0px -60% 0px", threshold: 0 },
+      { rootMargin: "-80px 0px -40% 0px", threshold: 0 },
     )
     toc.forEach((item) => {
       const h = document.getElementById(item.id)
