@@ -76,7 +76,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   const handleTocClick = useCallback((id: string) => {
     const h = document.getElementById(id)
     if (!h) return
-    h.scrollIntoView({ behavior: "smooth", block: "start" })
+    h.scrollIntoView({ behavior: "auto", block: "start" })
     setActiveId(id)
   }, [])
 
