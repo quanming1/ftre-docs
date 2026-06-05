@@ -50,23 +50,26 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   // 滚动监听 — 高亮当前可视标题
   useEffect(() => {
     if (toc.length === 0) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // 找第一个进入视口的标题作为 active
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setActiveId(entry.target.id)
-            break
-          }
+
+    const scrollContainer = document.getElementById("ftre-docs-main")
+    if (!scrollContainer) return
+
+    const handleScroll = () => {
+      const containerTop = scrollContainer.getBoundingClientRect().top + 80 // header offset
+      let currentId = toc[0].id
+      for (const item of toc) {
+        const h = document.getElementById(item.id)
+        if (!h) continue
+        if (h.getBoundingClientRect().top <= containerTop + 40) {
+          currentId = item.id
         }
-      },
-      { rootMargin: "-80px 0px -40% 0px", threshold: 0 },
-    )
-    toc.forEach((item) => {
-      const h = document.getElementById(item.id)
-      if (h) observer.observe(h)
-    })
-    return () => observer.disconnect()
+      }
+      setActiveId(currentId)
+    }
+
+    scrollContainer.addEventListener("scroll", handleScroll, { passive: true })
+    handleScroll() // initial
+    return () => scrollContainer.removeEventListener("scroll", handleScroll)
   }, [toc])
 
   // 点击 TOC 项 → 平滑滚动到对应标题
