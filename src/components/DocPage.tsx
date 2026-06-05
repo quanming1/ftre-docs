@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -6,68 +6,74 @@ import { ArrowLeft, ArrowRight, FileText } from 'lucide-react'
 import type { DocEntry } from '../docs'
 import { docLoaders, docs } from '../docs'
 
+interface TocItem {
+  id: string
+  text: string
+  level: 2 | 3
+}
+
 export default function DocPage({ doc }: { doc: DocEntry }) {
   const [content, setContent] = useState<string | null>(null)
-  const [activeHeading, setActiveHeading] = useState<string>("")
+  const [toc, setToc] = useState<TocItem[]>([])
+  const [activeId, setActiveId] = useState<string>("")
 
   useEffect(() => {
     let cancelled = false
     setContent(null)
-    setActiveHeading("")
+    setToc([])
+    setActiveId("")
     docLoaders[doc.path]().then((mod) => {
       if (!cancelled) setContent(mod.default)
     })
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [doc])
 
-  const { prev, next } = useMemo(() => {
-    const index = docs.findIndex((item) => item.path === doc.path)
-    return {
-      prev: index > 0 ? docs[index - 1] : null,
-      next: index >= 0 && index < docs.length - 1 ? docs[index + 1] : null,
-    }
-  }, [doc.path])
-
+  // 从 DOM 中提取标题，保证 ID 与渲染时生成的完全一致
   useEffect(() => {
     if (content === null) return
-
-    let observer: IntersectionObserver | null = null
-    const frame = window.requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
       const headings = Array.from(
         document.querySelectorAll<HTMLElement>(".prose-docs h2[id], .prose-docs h3[id]"),
       )
-
       if (headings.length === 0) return
-      setActiveHeading((current) => current || headings[0].id)
-
-      const nextObserver = new IntersectionObserver(
-        (entries) => {
-          const visible = entries
-            .filter((entry) => entry.isIntersecting)
-            .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-
-          if (visible[0]?.target instanceof HTMLElement) {
-            setActiveHeading(visible[0].target.id)
-          }
-        },
-        {
-          root: document.querySelector("main"),
-          rootMargin: "-96px 0px -68% 0px",
-          threshold: [0, 1],
-        },
-      )
-
-      observer = nextObserver
-      headings.forEach((heading) => nextObserver.observe(heading))
+      const items: TocItem[] = headings.map((h) => ({
+        id: h.id,
+        text: h.textContent || "",
+        level: h.tagName === "H3" ? 3 : 2,
+      }))
+      setToc(items)
+      setActiveId(headings[0].id)
     })
-
-    return () => {
-      window.cancelAnimationFrame(frame)
-      observer?.disconnect()
-    }
+    return () => cancelAnimationFrame(frame)
   }, [content, doc.path])
+
+  // 滚动监听 — 高亮当前可视标题
+  useEffect(() => {
+    if (toc.length === 0) return
+    const el = document.getElementById("ftre-docs-main")
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
+        if (visible[0]?.target.id) setActiveId(visible[0].target.id)
+      },
+      { root: el, rootMargin: "-80px 0px -60% 0px", threshold: 0 },
+    )
+    toc.forEach((item) => {
+      const h = document.getElementById(item.id)
+      if (h) observer.observe(h)
+    })
+    return () => observer.disconnect()
+  }, [toc])
+
+  // 点击 TOC 项 → 平滑滚动到对应标题
+  const handleTocClick = useCallback((id: string) => {
+    const h = document.getElementById(id)
+    if (!h) return
+    h.scrollIntoView({ behavior: "smooth", block: "start" })
+    setActiveId(id)
+  }, [])
 
   if (content === null) {
     return (
@@ -80,8 +86,17 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
     )
   }
 
+  // 去掉一级标题（由 DocPage 自己的 title 区替代），留 ## 和 ### 给 markdown 渲染
   const renderedContent = content.replace(/^#\s+.+(?:\r?\n)+/, '')
-  const toc = extractToc(renderedContent)
+
+  const { prev, next } = (() => {
+    const index = docs.findIndex((item) => item.path === doc.path)
+    return {
+      prev: index > 0 ? docs[index - 1] : null,
+      next: index >= 0 && index < docs.length - 1 ? docs[index + 1] : null,
+    }
+  })()
+
   const headingCounts = new Map<string, number>()
   const nextHeadingId = (children: ReactNode) => {
     const baseId = slugify(nodeText(children))
@@ -105,12 +120,8 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
-              h2: ({ children }) => (
-                <h2 id={nextHeadingId(children)}>{children}</h2>
-              ),
-              h3: ({ children }) => (
-                <h3 id={nextHeadingId(children)}>{children}</h3>
-              ),
+              h2: ({ children }) => <h2 id={nextHeadingId(children)}>{children}</h2>,
+              h3: ({ children }) => <h3 id={nextHeadingId(children)}>{children}</h3>,
             }}
           >
             {renderedContent}
@@ -118,48 +129,17 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
         </div>
 
         <footer className="mt-12 grid gap-3 border-t border-border-subtle pt-6 sm:grid-cols-2">
-          {prev ? (
-            <DocLink doc={prev} direction="prev" />
-          ) : (
-            <div />
-          )}
+          {prev ? <DocLink doc={prev} direction="prev" /> : <div />}
           {next && <DocLink doc={next} direction="next" />}
         </footer>
       </article>
 
-      <DocToc items={toc} activeId={activeHeading} />
+      <DocToc items={toc} activeId={activeId} onItemClick={handleTocClick} />
     </div>
   )
 }
 
-interface TocItem {
-  id: string
-  text: string
-  level: 2 | 3
-}
-
-function extractToc(markdown: string): TocItem[] {
-  const seen = new Map<string, number>()
-
-  return markdown
-    .split(/\r?\n/)
-    .map((line) => {
-      const match = /^(#{2,3})\s+(.+?)\s*$/.exec(line)
-      if (!match) return null
-      const text = match[2].replace(/[`*_~[\]()]/g, '').trim()
-      const baseId = slugify(text)
-      const count = seen.get(baseId) ?? 0
-      seen.set(baseId, count + 1)
-      return {
-        id: count === 0 ? baseId : `${baseId}-${count + 1}`,
-        text,
-        level: match[1].length as 2 | 3,
-      }
-    })
-    .filter((item): item is TocItem => Boolean(item))
-}
-
-function DocToc({ items, activeId }: { items: TocItem[]; activeId: string }) {
+function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: string; onItemClick: (id: string) => void }) {
   if (items.length === 0) return null
 
   return (
@@ -168,19 +148,17 @@ function DocToc({ items, activeId }: { items: TocItem[]; activeId: string }) {
         <div className="mb-4 text-[13px] font-semibold text-t-primary">本页目录</div>
         <nav className="space-y-2">
           {items.map((item) => (
-            <a
+            <button
               key={item.id}
-              href={`#${item.id}`}
-              className={`block truncate border-l-2 py-0.5 text-[13px] leading-5 transition-colors hover:text-neon ${
+              onClick={() => onItemClick(item.id)}
+              className={`block w-full truncate border-l-2 py-0.5 text-left text-[13px] leading-5 transition-colors hover:text-neon ${
                 activeId === item.id
                   ? 'border-neon text-t-primary font-medium'
                   : 'border-transparent text-t-muted'
-              } ${
-                item.level === 3 ? 'pl-4' : ''
-              }`}
+              } ${item.level === 3 ? 'pl-4' : ''}`}
             >
               {item.text}
-            </a>
+            </button>
           ))}
         </nav>
       </div>
@@ -199,18 +177,17 @@ function nodeText(node: ReactNode): string {
 }
 
 function slugify(value: string): string {
-  const slug = value
+  return value
     .trim()
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
-  return slug || 'section'
+    || 'section'
 }
 
 function DocLink({ doc, direction }: { doc: DocEntry; direction: 'prev' | 'next' }) {
   const isNext = direction === 'next'
-
   return (
     <Link
       to={`/docs/${doc.path}`}
