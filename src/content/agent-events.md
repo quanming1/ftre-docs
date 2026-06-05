@@ -168,8 +168,8 @@ LLM **逐步输出**工具调用参数时的流式增量。
 | `result` | string | 执行结果 |
 | `error` | string \| null | null 表示成功 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
-| `error_code` | string \| null | 错误码 |
-| `metadata` | object | 工具附加元数据（可选） |
+| `error_code` | string \| null | 错误码（如 `"cancelled"`, `"timed_out"`, `"parse_error"`） |
+| `metadata` | object | 工具附加元数据（可选，由工具实现传入） |
 
 ### tool_cancel_requested
 
@@ -340,3 +340,52 @@ _user_input 到达 AgentLoop_
 | 超出迭代 | `"max_iterations"` | false | 达到 `max_iterations` 上限 |
 | 错误 | `"error"` | false | LLM 调用失败且不可重试/重试耗尽 |
 | 取消 | `"cancelled"` | false | 用户发送 cancel 帧 |
+
+---
+
+## 内部类型
+
+这些结构只存在于 Agent 内部，不直接作为事件发出，但影响最终事件的生成。
+
+### StreamDelta
+
+LLM 流式输出的单次增量。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | string \| null | 文本增量 → 产出一条 `message` 事件 |
+| `reasoning` | string \| null | thinking 内容增量 → 产出一条 `reasoning` 事件 |
+| `tool_calls` | ToolCallDeltaChunk[] \| null | 工具调用增量 → 产出一条 `tool_call_streaming` 事件 |
+| `usage` | dict \| null | usage → 产出一条 `usage_update` 事件 |
+
+同一个 StreamDelta 可同时包含多个字段。
+
+### LLMResponse
+
+一次完整流式响应收束后的结果。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | string \| null | 完整文本（如有）|
+| `reasoning` | string \| null | 完整 reasoning（thinking 模型）|
+| `tool_calls` | ToolCallWrapper[] | 完整工具调用列表 |
+| `usage` | dict \| null | 本次响应的 Token 用量 |
+
+收到后按顺序产出：usage_update → reasoning_complete → message_complete → tool_call → tool_result。
+
+### 工具参数解析失败
+
+当 LLM 返回的 tool_call.function.arguments JSON 解析失败时，**不产出 tool_call 事件**，直接产出 tool_result：
+
+```json
+{
+  "type": "tool_result",
+  "data": {
+    "id": "call_abc123",
+    "name": "unknown",
+    "result": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
+    "error": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
+    "status": "failed"
+  }
+}
+```
