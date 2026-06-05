@@ -162,11 +162,15 @@ Client                          Server
   │                                │
   ├─ sendChat(content, meta) ────→│ ws_channel._on_message()
   │  (id=frameId)                 │   ├─ 校验 attachments
+  │                               │   │   └─ ❌ 违规 → _reject(ws) 不入 Bus
   │                               │   ├─ frame_id → metadata
-  │  local push userMsg           │   └─ receive(sid, data, meta)
-  │  (id=frameId)                 │       └─ Bus.publish_inbound()
-  │                               │           └─ AgentLoop._consume()
+  │                               │   └─ receive(sid, data, meta)
+  │  local push userMsg           │       └─ Bus.publish_inbound()
+  │  (id=frameId)                 │           └─ AgentLoop._consume()
   │                               │               └─ _run() [thread]
+  │                               │                   ├─ session 存在?
+  │                               │                   ├─ channel 匹配?
+  │                               │                   ├─ 已有 Agent 在跑? → skip
   │                               │                   ├─ save USER_INPUT
   │                               │                   ├─ echo user_input
   │                               │                   ├─ agent.run(messages)
