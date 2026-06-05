@@ -290,7 +290,9 @@
       "id": "call_abc123",
       "name": "bash",
       "result": "On branch develop\nnothing to commit",
-      "error": null
+      "error": null,
+      "status": "completed",
+      "error_code": null
     }
   }
 }

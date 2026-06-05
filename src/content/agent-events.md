@@ -189,10 +189,20 @@ LLM **逐步输出**工具调用参数时的流式增量。
 }
 ```
 
+| data 字段 | 类型 | 说明 |
+|-----------|------|------|
+| `id` | string | 工具调用 ID |
+| `name` | string | 工具名称 |
+| `reason` | string | 取消原因（如 `"user_cancelled"`） |
+| `status` | string | 固定为 `"cancelling"` |
+| `error_code` | string \| null | 错误码 |
+| `result_status` | string \| null | 最终结果状态（`"cancelled"`） |
+
 ### tool_cancelled / tool_timed_out
 
 工具被取消或超时后发出的状态事件。
 
+**tool_cancelled**：
 ```json
 {
   "type": "tool_cancelled",
@@ -206,6 +216,30 @@ LLM **逐步输出**工具调用参数时的流式增量。
   }
 }
 ```
+
+**tool_timed_out**：
+```json
+{
+  "type": "tool_timed_out",
+  "data": {
+    "id": "call_abc123",
+    "name": "bash",
+    "reason": "timed_out",
+    "status": "timed_out",
+    "error_code": "timed_out",
+    "result_status": "timed_out"
+  }
+}
+```
+
+| data 字段 | 类型 | 说明 |
+|-----------|------|------|
+| `id` | string | 工具调用 ID |
+| `name` | string | 工具名称 |
+| `reason` | string | 原因（`"user_cancelled"` / `"timed_out"`） |
+| `status` | string | `"cancelled"` / `"timed_out"` |
+| `error_code` | string \| null | 错误码 |
+| `result_status` | string \| null | 最终结果状态 |
 
 ### usage_update
 

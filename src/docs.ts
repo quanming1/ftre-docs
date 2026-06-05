@@ -28,6 +28,9 @@ export const docs: DocEntry[] = [
   { path: 'plugin-overview', title: '插件概述', category: '插件' },
   { path: 'plugin-api', title: 'Plugin API 参考', category: '插件' },
   { path: 'plugin-hooks', title: 'Hook 挂点与上下文', category: '插件' },
+
+  // 配置
+  { path: 'config-file', title: 'config.json 配置', category: '配置' },
 ]
 
 // 导出 loader map 给 DocPage 使用
