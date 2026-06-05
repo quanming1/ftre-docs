@@ -146,7 +146,7 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
     <aside className="doc-toc hidden xl:block">
       <div className="sticky top-[112px] max-h-[calc(100vh-128px)] overflow-y-auto border-l border-border-subtle pl-5">
         <div className="mb-4 text-[13px] font-semibold text-t-primary">本页目录</div>
-        <nav className="space-y-2">
+        <nav className="space-y-1.5">
           {items.map((item) => (
             <button
               key={item.id}
