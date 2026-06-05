@@ -1,6 +1,6 @@
 # Bus 消息协议
 
-Bus 消息是 ftre 后端内部的消息格式，由 Channel 层产生，经 EventBus 投递到 AgentLoop 消费。
+Bus 消息是 ftre 后端内部的消息格式，Channel 层产生 inbound 消息经 EventBus 投递到 AgentLoop 消费；AgentLoop 产生 outbound 事件经 EventBus 由 ChannelManager 分发到各 Channel。
 
 ## BusMessage 数据结构
 

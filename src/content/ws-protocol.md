@@ -380,8 +380,8 @@
   "data": {
     "type": "error",
     "data": {
-      "code": "network",
-      "message": "网络连接失败"
+      "message": "网络连接失败",
+      "code": "network"
     }
   }
 }
@@ -389,8 +389,8 @@
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `code` | string | 错误码 |
 | `message` | string | 错误描述 |
+| `code` | string | 错误码 |
 
 **前端处理**：
 - 关闭当前 streaming assistant 的 `streaming` 状态

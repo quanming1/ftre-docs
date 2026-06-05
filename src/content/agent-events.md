@@ -323,8 +323,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
   "type": "done",
   "data": {
     "success": true,
-    "reason": "completed",
-    "usage": { "prompt_tokens": 1500, "completion_tokens": 500, "total_tokens": 2000 }
+    "reason": "completed"
   }
 }
 ```
@@ -349,7 +348,8 @@ _user_input 到达 AgentLoop_
   │   │   │   ├─ reasoning         (chunk 1)
   │   │   │   ├─ reasoning         (chunk 2)
   │   │   │   ├─ tool_call_streaming  (arg chunk)
-  │   │   │   └─ usage_update
+  │   │   │   └─ usage_update      (stream)
+  │   │   ├─ usage_update          (LLMResponse，如有 usage)
   │   │   ├─ reasoning_complete
   │   │   ├─ message_complete      (如有文本)
   │   │   ├─ tool_call             (每个 tool)
@@ -419,7 +419,8 @@ LLM 流式输出的单次增量。
     "name": "unknown",
     "result": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
     "error": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
-    "status": "failed"
+    "status": "failed",
+    "error_code": null
   }
 }
 ```
