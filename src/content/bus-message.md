@@ -23,11 +23,11 @@ class BusMessage:
 | 字段 | 类型 | 谁填充 | 说明 |
 |------|------|-------|------|
 | `id` | string | 自动 | 16 位 hex UUID，创建时自动生成 |
-| `type` | string | Channel | `"user_input"` / `"cancel"` / `"agent_event"` |
+| `type` | string | Channel / AgentLoop | `"user_input"` / `"cancel"` / `"agent_event"` / `"global_event"` |
 | `from_channel` | string | Channel | 来源 Channel ID（`"ws"`, `"subagent"` 等） |
 | `from_session` | string | Channel | 来源 Session ID |
-| `to_channel` | string | Channel | 目标 Channel ID（与 from_channel 相同） |
-| `to_session` | string | Channel | 目标 Session ID（与 from_session 相同） |
+| `to_channel` | string | Channel | 目标 Channel ID（与 from_channel 相同；`"*"` 表示全局广播） |
+| `to_session` | string | Channel | 目标 Session ID（与 from_session 相同；`"*"` 表示全局广播） |
 | `data` | dict | Channel / AgentLoop | 原始 payload |
 | `metadata` | dict | Channel | 附加信息（如 `frame_id`） |
 | `timestamp` | float | 自动 | `time.time()` |
@@ -39,6 +39,7 @@ class BusMessage:
 | `"user_input"` | `Channel.receive()` | `AgentLoop._consume()` | 用户消息（content, session_id, attachments） |
 | `"cancel"` | `Channel.receive()` | `AgentLoop._consume()` | `{ session_id }` |
 | `"agent_event"` | `AgentLoop._run()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}` |
+| `"global_event"` | `AgentLoop` 等 | `ChannelManager._dispatch_loop()` | 全局广播事件 `{type: "<event-type>", data: {...}}`，`to_channel` / `to_session` 固定为 `"*"` |
 
 ### data 内容（按 type）
 
@@ -76,12 +77,78 @@ BusMessage 由以下 Channel 的 `receive()` 方法构造：
 |---------|-----------|------|
 | `WebSocketChannel` | `"ws"` | 客户端发送 `user_input` / `cancel` 帧时 |
 | `SubagentChannel` | `"subagent"` | `task` 工具派发子任务时 |
-| `TestChannel` | `"test"` | 测试/调试用 |
 
 ## 消费
 
 - **inbound**（`type: "user_input"` / `"cancel"`）→ `AgentLoop._consume()` 消费
 - **outbound**（`type: "agent_event"`）→ `ChannelManager._dispatch_loop()` 按 `to_channel` 分发到对应 Channel
+
+## 全局广播消息（global event）
+
+某些 outbound 事件的消费者不是单一 session，而是**跨 session 的全局视图**（典型：会话列表需要知道"哪些 session 正在运行"）。这类视图通常没有 `attach` 对应的 session，无法用点对点的 `to_channel` + `to_session` 寻址送达。
+
+为此，BusMessage 约定一组**硬编码的全局标记值**（定义在 `bus/message.py`）：
+
+| 常量 | 值 | 含义 |
+|------|-----|------|
+| `GLOBAL_CHANNEL` | `"*"` | `to_channel` 设为此值 → 分发给**所有**已注册 Channel |
+| `GLOBAL_SESSION` | `"*"` | `to_session` 设为此值 → Channel 扇出给它管理的**所有**连接 |
+
+**不需要改 `BusMessage` 结构**，全局广播复用现有字段，只是把 `to_channel` / `to_session` 设为 `"*"`。
+
+### 分发路径
+
+```
+AgentLoop._publish_session_status()
+  │  BusMessage(type="global_event", to_channel="*", to_session="*",
+  │             data={type:"session_status", data:{...}})
+  ▼
+ChannelManager._dispatch_loop()
+  │  to_channel == GLOBAL_CHANNEL("*")  →  遍历所有 Channel，逐个 send()
+  ▼
+WebSocketChannel.send()
+  │  to_session == GLOBAL_SESSION("*")  →  遍历所有活跃 ws 连接（无视 attach）扇出
+  │  其它静默 Channel（subagent / cron）的 send() 直接忽略
+  ▼
+所有前端连接收到下行帧
+```
+
+两层判断各司其职：
+- `ChannelManager` 只认 `to_channel`，`"*"` 表示"扇给所有 Channel"。
+- 每个 Channel 的 `send()` 自行决定 `to_session == "*"` 时如何扇出。`ws_channel` 遍历全部连接；`subagent` / `cron` 是静默 channel，`send()` 本就 `return`，天然忽略。
+
+### 广播事件子类型
+
+广播消息使用顶层 `type: "global_event"`（与 per-session 的 `agent_event` 区分），靠 `data.type` 区分具体事件：
+
+| data.type | 说明 | 触发点 |
+|-----------|------|--------|
+| `session_status` | session 运行态变化 | `AgentLoop` 在 `_active_agents` 增删的同一处发出 |
+
+**session_status 的 data**：
+
+```json
+{
+  "type": "session_status",
+  "data": {
+    "session_id": "ws::sess_xxx",
+    "status": "running"
+  }
+}
+```
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `session_id` | string | 状态发生变化的 session（注意在 data 内，因为帧本身不绑定单一 session） |
+| `status` | string | `"running"`（Agent 进入活跃态）/ `"idle"`（Agent 退出） |
+
+**强一致保证**：`running` 在 `_active_agents[sid] = agent` 之后立即发，`idle` 在 `finally` 中 `pop` 之后发。广播信号与后端 `_active_agents` 的真实运行态由同一段代码守护，不会漂移。
+
+**初始快照**：广播只负责**增量**。新连接 / 刷新的前端，应通过 HTTP `GET /api/sessions` 获取当前各 session 的运行态作为初始快照，之后靠 `session_status` 广播保持同步。后端不在连接建立时补发快照，避免 `ws_channel` 反向依赖 `AgentLoop`。
+
+> **注意**：后端 global_event 基础设施已完整实现；前端 `chat.ts` 当前已消费 `session_status`，但只是把它作为触发信号调用 `useSession.loadAllSessions()`，由 HTTP `GET /api/sessions` 重新获取会话列表运行态，并非直接维护本地增量状态表。
+
+**并发丢弃不发事件**：`AgentLoop` 的并发防御（同 session 已运行时静默丢弃新 `user_input`）不改变运行态，因此不发 `session_status`。
 
 ## metadata 字段
 

@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ArrowLeft, ArrowRight, FileText } from 'lucide-react'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
 import type { DocEntry } from '../docs'
 import { docLoaders, docs } from '../docs'
 
@@ -114,10 +114,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
     <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_240px]">
       <article className="min-w-0 max-w-[688px] w-full">
         <div className="mb-7">
-          <div className="mb-3 flex items-center gap-2 text-[12px] text-t-ghost">
-            <FileText size={14} strokeWidth={1.8} />
-            <span>{doc.category}</span>
-          </div>
+
           <h2 className="text-[32px] font-semibold leading-tight text-t-primary sm:text-[40px]">{doc.title}</h2>
         </div>
 

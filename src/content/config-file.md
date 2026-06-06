@@ -124,10 +124,10 @@
 |------|------|:---:|------|
 | `api_key` | string | 是 | API 密钥 |
 | `api_base` | string | 否 | 自定义端点，默认 OpenAI 官方 |
-| `api_protocol` | string | 否 | 协议，`"openai"`（默认）或 `"responses"` |
+| `api_protocol` | string | 否 | 决定 LiteLLM 模型名前缀，默认 `"openai"`。支持：`"openai"` / `"anthropic"` / `"gemini"` / `"azure"` / `"bedrock"` |
 | `models` | array | 是 | 可用模型列表 |
 
-> `api_protocol` 选 `"responses"` 时走 litellm 的 Responses API，支持 `previous_response_id` 等高级特性。一般用 `"openai"` 即可。
+> `api_protocol` 决定 LiteLLM 模型名的 provider 前缀（如 `openai/gpt-4o`）。如果模型 id 本身已含已知 LiteLLM 前缀（如 `openai/`、`deepseek/`、`groq/` 等），则不会重复拼接。
 
 ### Model 条目
 

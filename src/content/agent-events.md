@@ -21,6 +21,8 @@ Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。�
 | `error` | Agent 错误 | LLM 调用失败（不可重试/重试耗尽） |
 | `done` | 执行结束 | 正常完成 / 错误 / 取消 / 超迭代 |
 
+> **注意**：`session_status` 不在此列。它不是 `ReActAgent` 产出的事件，而是 `AgentLoop` 在 session 进入 / 退出活跃态时注入的全局广播事件，使用顶层 `type: "global_event"`、`to_channel="*"` / `to_session="*"` 扇出给所有连接。详见 [WebSocket 协议 — 全局广播事件](/docs/ws-protocol) 与 [Bus 消息协议](/docs/bus-message)。
+
 ---
 
 ## 事件详细定义
@@ -168,7 +170,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 | `result` | string | 执行结果 |
 | `error` | string \| null | null 表示成功 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
-| `error_code` | string \| null | 错误码（如 `"cancelled"`, `"timed_out"`, `"parse_error"`） |
+| `error_code` | string \| null | 错误码（预留字段，当前始终为 `null`） |
 | `metadata` | object | 工具附加元数据（可选，由工具实现传入） |
 
 ### tool_cancel_requested

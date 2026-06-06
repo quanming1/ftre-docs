@@ -305,7 +305,7 @@
 | `result` | string | 执行结果 |
 | `error` | string \| null | 非 null 表示执行失败 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
-| `error_code` | string \| null | 错误码（如 `"cancelled"`, `"timed_out"`, `"parse_error"`） |
+| `error_code` | string \| null | 错误码（预留字段，当前始终为 `null`） |
 | `metadata` | object | 工具附加元数据（由工具实现传入，可选） |
 
 **前端处理**：
@@ -519,6 +519,53 @@
 
 ---
 
+## 全局广播事件（global event）
+
+少数事件不针对单一 session，而是广播给**所有** WebSocket 连接，供跨 session 的全局视图（如会话列表）消费。这类下行帧使用顶层 `type: "global_event"`（区别于 per-session 的 `agent_event`），`metadata.channel_id` 与 `metadata.session_id` 均为 `"*"`，真正关心的 session ID 在 `data.data.session_id` 里。
+
+后端分发不走 per-session 的 `attach` 索引，而是扇出给所有活跃连接，因此**无需 attach 也能收到**。详见 [Bus 消息协议 — 全局广播消息](/docs/bus-message)。
+
+**前端分流**：在 WebSocket 入口按顶层 `type` 分流。`agent_event` 进 `applyEvent`（按 session 路由到消息流），`global_event` 不进消息流；当前 `chat.ts` 已消费 `session_status`，收到后触发会话列表 store 重新拉取 `GET /api/sessions`，从而刷新运行态。当前前端不是维护本地 `sessionId → status` 增量映射，而是用 WebSocket 信号触发 HTTP 刷新。
+
+### session_status — session 运行态变化
+
+```json
+{
+  "type": "global_event",
+  "data": {
+    "type": "session_status",
+    "data": {
+      "session_id": "ws::sess_xxx",
+      "status": "running"
+    }
+  },
+  "metadata": {
+    "channel_id": "*",
+    "session_id": "*"
+  }
+}
+```
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `session_id` | string | 状态变化的 session ID（在 data 内，因为帧本身不绑定单一 session） |
+| `status` | string | `"running"`（Agent 开始运行）/ `"idle"`（Agent 结束运行） |
+
+**何时发出**：
+- `running`：`user_input` 被 `AgentLoop` 受理、Agent 进入活跃态时（在 `user_input` echo 之前）
+- `idle`：Agent 执行结束时（在 `done` 之后，正常 / 错误 / 取消 / 超迭代都会发）
+
+**前端处理**：
+- 不入消息流、不持久化，是瞬时控制信号
+- `chat.ts` 收到 `session_status` 后触发 `useSession.loadAllSessions()`，由 HTTP `GET /api/sessions` 重新获取会话列表运行态
+- 初始态同样通过 HTTP `GET /api/sessions` 获取
+
+**当前状态**：后端已完整实现 global_event 的生成与扇出；前端已消费 `session_status`，但消费方式是把它作为刷新会话列表的触发信号，而不是直接维护本地增量状态表。
+
+**注意**：`session_status` 不在 `PERSISTENT_EVENTS` 中，不写入 DB，历史回放（`GET /api/sessions/:id/messages`）不会出现。
+
+---
+
 ## 附件协议
 
 ### 请求格式
@@ -601,7 +648,7 @@
 
 示例：
 - `ws::sess_89f19d375bbc` — WebSocket 来源的 session
-- `cron::cron_abc123` — Cron 触发的 session
+- `cron::sess_xxx` — Cron 触发的 session
 - `subagent::sess_xxx` — 子任务 session
 
 ---
@@ -653,7 +700,7 @@
 [来自 <channel>::<session> 的消息] <content>
 ```
 
-格式为 `role: "assistant", name: "<src>"`。
+格式为 `role: "assistant", name: _safe_name(src)`。其中 `_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符（例 `ws::sess_xxx` → `ws__sess_xxx`）。
 
 ### attach / detach — 无确认响应
 
@@ -665,25 +712,29 @@
 
 ### HTTP API 路由
 
-后端 FastAPI 同时挂载了 `/api/*` HTTP 路由（`ws_channel.py:117`）：
+后端 FastAPI 同时挂载了 `/api/*` HTTP 路由（`ws_channel.py:116-117`）：
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
 | GET | `/api/config` | 读取 `~/.ftre/config.json` |
+| PUT | `/api/config` | 覆盖写 `~/.ftre/config.json` |
+| GET | `/api/health` | 健康检查 |
 | POST | `/api/sessions` | 创建 session |
-| GET | `/api/sessions` | 列出 sessions |
-| GET | `/api/sessions/:id` | 获取 session 详情 |
+| GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤） |
 | PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
-| GET | `/api/sessions/:id/messages` | 分页拉取历史消息（即 `USER_INPUT` 的来源） |
-| DELETE | `/api/sessions/:id` | 删除 session |
+| DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
+| GET | `/api/sessions/:id/messages` | 拉取全部历史消息（即 `USER_INPUT` 的来源） |
+| GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区 |
-| GET | `/api/skills` | Skill CRUD |
-| GET | `/api/cron/jobs` | Cron 任务 CRUD |
+| GET | `/api/skills` | 列出所有 Skill 元信息 |
+| GET | `/api/skills/:name` | 读取单个 Skill 完整信息 |
+| POST | `/api/skills` | 创建 Skill |
+| PUT | `/api/skills/:name` | 覆盖写 Skill 正文 |
+| DELETE | `/api/skills/:name` | 删除 Skill |
+| GET | `/api/cron` | 列出所有 Cron 任务 |
+| GET | `/api/cron/:job_id` | 获取单个 Cron 任务 |
+| POST | `/api/cron` | 创建 Cron 任务 |
+| PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务 |
+| DELETE | `/api/cron/:job_id` | 删除 Cron 任务 |
 
-`fetchSessionMessagesPage` 分页参数：
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `limit` | int | 每页条数（默认 200） |
-| `before_ts` | float | 拉取早于此时间戳的消息 |
-| `after_ts` | float | 拉取晚于此时间戳的消息（增量更新用） |
+`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），不分页。

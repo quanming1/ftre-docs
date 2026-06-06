@@ -139,10 +139,12 @@ class MyTool(Tool):
 from ftre_agent_core.tool import Injected
 
 class MyTool(Tool):
-    async def _run(self, event_loop: Injected("event_loop"), **kwargs):
+    async def _run(self, event_loop=Injected("event_loop"), **kwargs):
         # event_loop 由 ToolRegistry 从 runtime_context 中注入
         ...
 ```
+
+`Injected` 必须作为参数默认值使用（如 `event_loop=Injected("event_loop")`），框架通过默认值识别并隐藏该参数；不要写成类型注解形式。
 
 ## 内置插件参考
 
@@ -151,6 +153,6 @@ ftre 自带了几个参考插件，放在 `~/.ftre/plugins/` 下：
 | 文件 | 名称 | 功能 |
 |------|------|------|
 | `skill_plugin.py` | skill | 加载 Skill 文件 + 注入 system prompt + 注册 loadSkill 工具 |
-| `context_govern.py` | context | 对话历史裁剪、压缩、治理 |
-| `context_compact.py` | compact | 上下文压缩（summary + 事件清理） |
+| `context_govern.py` | context_govern | 对话历史裁剪、压缩、治理 |
+| `context_compact.py` | context_compact | 上下文压缩（summary + 事件清理） |
 | `title_gen.py` | title_gen | 自动生成会话标题 |
