@@ -10,10 +10,11 @@
 │  └────┬────┘  └────────┬─────────┘  │
 │       │                │            │
 │  ┌────┴────────────────┴─────────┐  │
-│  │      WebSocket Client         │  │
+│  │ WebSocket + HTTP API Client   │  │
 │  └────────────┬──────────────────┘  │
 └───────────────┼──────────────────────┘
                 │ ws://127.0.0.1:18790/
+                │ http://127.0.0.1:18790/api
 ┌───────────────┼──────────────────────┐
 │  ftre Gateway (Python / FastAPI)     │
 │               │                      │
@@ -24,7 +25,8 @@
 │  ┌────────┴─────────┐               │
 │  │ Channel Manager   │               │
 │  │ ├ WS Channel      │               │
-│  │ └ Subagent Channel│               │
+│  │ ├ Subagent Channel│               │
+│  │ └ Cron Channel    │               │
 │  └───────────────────┘               │
 │           │                          │
 │  ┌────────┴──────────────────────┐   │
@@ -60,7 +62,9 @@
 ### Channel
 
 - **WebSocket Channel**：管理 WS 连接，attach/detach session，校验附件
+- **HTTP API**：由 WebSocketChannel 内部 FastAPI app 挂载在 `/api`，提供 sessions / config / cron / skills 等管理接口
 - **Subagent Channel**：静默通道，承载 `task` 工具派发的子任务
+- **Cron Channel**：静默通道，承载 Cron Scheduler 触发的任务
 
 ### Agent Loop
 

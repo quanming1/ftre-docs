@@ -34,7 +34,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 是 | 帧唯一标识（16 位 hex UUID） |
+| `id` | string | 是 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端 BusMessage 默认用 uuid4 hex 前 16 位 |
 | `type` | string | 是 | 帧类型，决定路由行为 |
 | `data` | object | 是 | 载荷，结构因 type 而异 |
 | `metadata` | object | 否 | 附加元数据，透传给 Agent |
@@ -116,6 +116,8 @@
 | `agent_id` | string | Agent ID（默认 `"code_agent"`） |
 | `session_id` | string | 当前 session（与 data.session_id 相同） |
 
+> 注意：当前后端仅透传这些 metadata；模型选择实际来自 `~/.ftre/config.json`，`metadata.model` / `metadata.provider` / `metadata.agent_id` 不会改变本次 LLM 配置。
+
 **行为流程**：
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
 2. 隐式 attach 当前 session
@@ -129,7 +131,7 @@
 - 前端收到 echo，检查 `messages` 中是否已有同 id → 有则跳过，避免重复渲染
 
 **并发防御**：
-- 后端 `is_session_running()` 检查：同一 session 已有 Agent 运行时，静默丢弃新 `user_input`
+- `AgentLoop._run()` 中通过 `is_session_running()` 检查；同一 session 已有 Agent 运行时静默丢弃新 `user_input`
 - 前端 `isBusy` 状态阻止重复发送
 
 ### 4. cancel — 取消生成
@@ -167,8 +169,8 @@
 
 | metadata 字段 | 类型 | 说明 |
 |---------------|------|------|
-| `channel_id` | string | 来源 Channel（`"ws"`） |
-| `session_id` | string | 所属 session |
+| `channel_id` | string | 目标 Channel ID，即后端 `BusMessage.to_channel`；普通 ws 消息为 `"ws"`，全局广播为 `"*"` |
+| `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
 
 ### 事件类型完整列表
 
@@ -305,15 +307,15 @@
 | `result` | string | 执行结果 |
 | `error` | string \| null | 非 null 表示执行失败 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
-| `error_code` | string \| null | 错误码（预留字段，当前始终为 `null`） |
-| `metadata` | object | 工具附加元数据（由工具实现传入，可选） |
+| `error_code` | string \| null | 错误码；当前 `ToolHandler` 调用时未传入，通常为 `null` |
+| `metadata` | object | 预留的工具附加元数据字段；当前 `ToolHandler` 调用 `tool_result_event()` 时未传入，通常不存在 |
 
 **前端处理**：
 - 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`）
 
 #### tool_cancel_requested / tool_cancelled / tool_timed_out
 
-工具取消/超时状态事件。**后端持久化**（在 `PERSISTENT_EVENTS` 中），会存入 DB 历史，但**前端 `applyEvent` 无对应 case 分支，不做任何渲染处理**。
+这些类型属于预留/可持久化事件（在 `PERSISTENT_EVENTS` 中），但当前 `ToolHandler` 取消路径主要下发 `tool_result(status="cancelled")`，前端 `applyEvent` 对这三类无 case 分支。当前也没有统一的 `tool_timed_out` 实时事件。
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
@@ -448,7 +450,7 @@
 **前端处理**：
 - `sealStreamingPart()` 封口所有流式 parts
 - 设置 `streaming = false`
-- 将 running/pending 的 toolCalls 标记为 `"ok"`
+- 当前前端会将仍处于 running/pending 的 toolCalls 标记为 `"ok"`
 - `isBusy = false` → 解除输入框锁定
 
 #### context_compact_start / context_compact_done / context_compact_failed
@@ -478,6 +480,8 @@
 - `context_compact_start`：push 一条 `compact.status = "running"` 的 system 消息
 - `context_compact_done`：找最后一条 `running` 的 compact 消息，更新为 `status = "done"`，写入 `tokensBefore` 和 `summaryPreview`
 - `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
+
+**注意**：这三类实时事件由本地插件（如 `context_compact.py`）通过 Bus 发送，当前不在后端 `AgentLoop.PERSISTENT_EVENTS` 白名单内，默认不会由 AgentLoop 持久化。
 
 #### context_compact — 历史回放专用
 
@@ -521,7 +525,7 @@
 
 ## 全局广播事件（global event）
 
-少数事件不针对单一 session，而是广播给**所有** WebSocket 连接，供跨 session 的全局视图（如会话列表）消费。这类下行帧使用顶层 `type: "global_event"`（区别于 per-session 的 `agent_event`），`metadata.channel_id` 与 `metadata.session_id` 均为 `"*"`，真正关心的 session ID 在 `data.data.session_id` 里。
+少数事件不针对单一 session，而是广播给**所有** WebSocket 连接，供跨 session 的全局视图（如会话列表）消费。这类下行帧使用顶层 `type: "global_event"`（区别于 per-session 的 `agent_event`）。`session_status` 这类全局事件当前 `metadata.channel_id` 与 `metadata.session_id` 为 `"*"`，真正关心的 session ID 在 `data.data.session_id` 里。
 
 后端分发不走 per-session 的 `attach` 索引，而是扇出给所有活跃连接，因此**无需 attach 也能收到**。详见 [Bus 消息协议 — 全局广播消息](/docs/bus-message)。
 
@@ -678,10 +682,14 @@
 |------|-----------|------|
 | `"text"` | string | 纯文本内容 |
 | `"skill"` | string | 用户选中的 Skill 名称 |
+| `"code_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略 |
+| `"archive_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略 |
+
+当前后端 `_content_to_text` 实际只处理 `text` 和 `skill`，其它 part 会被忽略。
 
 **后端归一化（`_content_to_text`）**：
 - string → 直接使用
-- array → 遍历 parts，text 部分用 `"\n".join()` 拼接，skill 部分转为 XML 标注
+- array → 遍历 parts，`text` 部分用 `"\n".join()` 拼接，`skill` 部分转为 XML 标注；其它 part 当前会被忽略
 - 最终传给 LLM 的是纯文本
 
 ---
@@ -700,7 +708,7 @@
 [来自 <channel>::<session> 的消息] <content>
 ```
 
-格式为 `role: "assistant", name: _safe_name(src)`。其中 `_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符（例 `ws::sess_xxx` → `ws__sess_xxx`）。
+格式为 `role: "assistant", name: _safe_name(src)`。其中 `_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符（例 `ws::sess_xxx` → `ws_sess_xxx`）。
 
 ### attach / detach — 无确认响应
 
@@ -708,11 +716,11 @@
 
 ### context_compact — 上下文压缩
 
-`context_compact_start / done / failed` 事件由插件（`context_compact.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用压缩后的 summary 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
+`context_compact_start / done / failed` 事件由插件（`context_compact.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
 
 ### HTTP API 路由
 
-后端 FastAPI 同时挂载了 `/api/*` HTTP 路由（`ws_channel.py:116-117`）：
+后端 FastAPI 在 WebSocketChannel 初始化时 `include_router(api_router, prefix="/api")`，挂载以下 HTTP 路由：
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
@@ -723,7 +731,7 @@
 | GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤） |
 | PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
 | DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
-| GET | `/api/sessions/:id/messages` | 拉取全部历史消息（即 `USER_INPUT` 的来源） |
+| GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；`USER_INPUT` 历史事件来自这里） |
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区 |
 | GET | `/api/skills` | 列出所有 Skill 元信息 |
@@ -736,5 +744,6 @@
 | POST | `/api/cron` | 创建 Cron 任务 |
 | PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务 |
 | DELETE | `/api/cron/:job_id` | 删除 Cron 任务 |
+| GET | `/api/commands` | 返回已注册的斜杠指令列表 |
 
-`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），不分页。
+`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数不会被后端读取。

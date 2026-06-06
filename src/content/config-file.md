@@ -123,8 +123,8 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
 | `api_key` | string | 是 | API 密钥 |
-| `api_base` | string | 否 | 自定义端点，默认 OpenAI 官方 |
-| `api_protocol` | string | 否 | 决定 LiteLLM 模型名前缀，默认 `"openai"`。支持：`"openai"` / `"anthropic"` / `"gemini"` / `"azure"` / `"bedrock"` |
+| `api_base` | string | 否 | 自定义端点 |
+| `api_protocol` | string | 否 | 决定 LiteLLM 模型名前缀，默认 `"openai"`。当前内置映射支持：`"openai"` / `"anthropic"` / `"gemini"` / `"azure"` / `"bedrock"`；其它值会回退为 `openai` 前缀 |
 | `models` | array | 是 | 可用模型列表 |
 
 > `api_protocol` 决定 LiteLLM 模型名的 provider 前缀（如 `openai/gpt-4o`）。如果模型 id 本身已含已知 LiteLLM 前缀（如 `openai/`、`deepseek/`、`groq/` 等），则不会重复拼接。
@@ -133,7 +133,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 是 | 模型 ID，用于 `agents.defaults.model` 匹配。**注意：**是 Provider 原生 ID，不含 LiteLLM 前缀 |
+| `id` | string | 是 | 模型 ID，用于 `agents.defaults.model` 匹配。通常填写 Provider 原生 ID；也允许填写已带已知 LiteLLM provider 前缀的 ID（如 `openai/gpt-4o`、`deepseek/deepseek-chat`），此时内部不会重复拼接前缀 |
 | `name` | string | 否 | 展示名称 |
 | `context_window` | int | 否 | 上下文窗口大小（token 数） |
 | `max_output` | int | 否 | 最大输出 token 数 |
@@ -148,10 +148,14 @@
 | `openai` | `openai/<id>` | `openai/gpt-4o` |
 | `anthropic` | `anthropic/<id>` | `anthropic/claude-sonnet-4` |
 | `gemini` | `gemini/<id>` | `gemini/gemini-2.5-pro` |
+| `azure` | `azure/<id>` | `azure/my-deployment` |
+| `bedrock` | `bedrock/<id>` | `bedrock/anthropic.claude-3-sonnet` |
 
-> 如果 `id` 本身已含已知 LiteLLM 前缀（如 `openai/gpt-4o`、`deepseek/chat`），则**不再重复拼接**。这适用于网关模型名本身已带前缀的场景。
+> 如果 `id` 本身已含已知 LiteLLM 前缀（如 `openai/gpt-4o`、`deepseek/deepseek-chat`），则**不再重复拼接**。这适用于网关模型名本身已带前缀的场景。当前白名单包括 `openai/`, `anthropic/`, `azure/`, `gemini/`, `bedrock/`, `groq/`, `vertex_ai/`, `ollama/`, `huggingface/`, `cohere/`, `mistral/`, `deepseek/`, `together_ai/`, `replicate/`。
 
 ## plugins
+
+> 注意：`plugins[]` 不是插件启用列表。Gateway 会扫描并加载 `~/.ftre/plugins/` 下所有 `.py` 插件；`plugins[]` 仅用于给同名插件传入 `config`。未出现在 `plugins[]` 中的插件仍会加载，只是收到空配置。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|

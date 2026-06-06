@@ -13,9 +13,9 @@ Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。�
 | `tool_call` | 工具调用 | 解析 LLM 返回的 tool_calls 后 |
 | `tool_call_streaming` | 工具调用参数流式增量 | LLM 逐步输出 tool_call args |
 | `tool_result` | 工具执行结果 | 工具执行完成 |
-| `tool_cancel_requested` | 工具取消请求 | 用户取消时，每个 pending 工具 |
-| `tool_cancelled` | 工具已取消 | 工具被取消后 |
-| `tool_timed_out` | 工具执行超时 | 工具执行超时 |
+| `tool_cancel_requested` | 工具取消请求 | 已定义，当前运行时不产出 |
+| `tool_cancelled` | 工具已取消 | 已定义，当前运行时不产出 |
+| `tool_timed_out` | 工具执行超时 | 已定义，当前没有统一产出 |
 | `usage_update` | Token 用量更新 | LLM 返回 usage 信息时 |
 | `retry` | LLM 重试 | 遇到可重试错误时 |
 | `error` | Agent 错误 | LLM 调用失败（不可重试/重试耗尽） |
@@ -170,78 +170,17 @@ LLM **逐步输出**工具调用参数时的流式增量。
 | `result` | string | 执行结果 |
 | `error` | string \| null | null 表示成功 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
-| `error_code` | string \| null | 错误码（预留字段，当前始终为 `null`） |
-| `metadata` | object | 工具附加元数据（可选，由工具实现传入） |
+| `error_code` | string \| null | 错误码（当前 `ToolHandler` 调用时未传入，通常为 `null`） |
+| `metadata` | object | 预留的工具附加元数据字段；当前 `ToolHandler` 未实际写入，通常不存在 |
 
-### tool_cancel_requested
+### tool_cancel_requested / tool_cancelled / tool_timed_out
 
-取消信号到达时，**正在 pending 的工具**标记为取消请求。
+这些事件类型在 `ftre-agent-core` 中已有事件构造函数，后端持久化白名单也保留了这些类型，但当前运行时路径不产出它们：
 
-```json
-{
-  "type": "tool_cancel_requested",
-  "data": {
-    "id": "call_abc123",
-    "name": "bash",
-    "reason": "user_cancelled",
-    "status": "cancelling",
-    "error_code": null,
-    "result_status": "cancelled"
-  }
-}
-```
+- 工具取消通过 `tool_result(status="cancelled")` 加最终 `done(success=false, reason="cancelled")` 表达。
+- 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。
 
-| data 字段 | 类型 | 说明 |
-|-----------|------|------|
-| `id` | string | 工具调用 ID |
-| `name` | string | 工具名称 |
-| `reason` | string | 取消原因（如 `"user_cancelled"`） |
-| `status` | string | 固定为 `"cancelling"` |
-| `error_code` | string \| null | 错误码 |
-| `result_status` | string \| null | 最终结果状态（`"cancelled"`） |
-
-### tool_cancelled / tool_timed_out
-
-工具被取消或超时后发出的状态事件。
-
-**tool_cancelled**：
-```json
-{
-  "type": "tool_cancelled",
-  "data": {
-    "id": "call_abc123",
-    "name": "bash",
-    "reason": "user_cancelled",
-    "status": "cancelled",
-    "error_code": "cancelled",
-    "result_status": "cancelled"
-  }
-}
-```
-
-**tool_timed_out**：
-```json
-{
-  "type": "tool_timed_out",
-  "data": {
-    "id": "call_abc123",
-    "name": "bash",
-    "reason": "timed_out",
-    "status": "timed_out",
-    "error_code": "timed_out",
-    "result_status": "timed_out"
-  }
-}
-```
-
-| data 字段 | 类型 | 说明 |
-|-----------|------|------|
-| `id` | string | 工具调用 ID |
-| `name` | string | 工具名称 |
-| `reason` | string | 原因（`"user_cancelled"` / `"timed_out"`） |
-| `status` | string | `"cancelled"` / `"timed_out"` |
-| `error_code` | string \| null | 错误码 |
-| `result_status` | string \| null | 最终结果状态 |
+因此客户端不应依赖这些事件作为取消/超时的实时信号。
 
 ### usage_update
 
@@ -411,14 +350,14 @@ LLM 流式输出的单次增量。
 
 ### 工具参数解析失败
 
-当 LLM 返回的 tool_call.function.arguments JSON 解析失败时，**不产出 tool_call 事件**，直接产出 tool_result：
+当 LLM 返回的 tool_call.function.arguments JSON 解析失败时，**不产出 tool_call 事件**，直接产出 tool_result。`name` 保留模型返回的原始 `tool_call.function.name`，不是固定值：
 
 ```json
 {
   "type": "tool_result",
   "data": {
     "id": "call_abc123",
-    "name": "unknown",
+    "name": "bash",
     "result": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
     "error": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
     "status": "failed",

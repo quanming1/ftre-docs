@@ -26,8 +26,8 @@ class BusMessage:
 | `type` | string | Channel / AgentLoop | `"user_input"` / `"cancel"` / `"agent_event"` / `"global_event"` |
 | `from_channel` | string | Channel | 来源 Channel ID（`"ws"`, `"subagent"` 等） |
 | `from_session` | string | Channel | 来源 Session ID |
-| `to_channel` | string | Channel | 目标 Channel ID（与 from_channel 相同；`"*"` 表示全局广播） |
-| `to_session` | string | Channel | 目标 Session ID（与 from_session 相同；`"*"` 表示全局广播） |
+| `to_channel` | string | Channel / AgentLoop / Tool | 目标 Channel ID；普通 `Channel.receive()` inbound 通常等于 `from_channel`，跨通道投递或全局广播时可能不同；`"*"` 表示全局广播 |
+| `to_session` | string | Channel / AgentLoop / Tool | 目标 Session ID；普通 `Channel.receive()` inbound 通常等于 `from_session`，跨会话投递或全局广播时可能不同；`"*"` 表示全局广播 |
 | `data` | dict | Channel / AgentLoop | 原始 payload |
 | `metadata` | dict | Channel | 附加信息（如 `frame_id`） |
 | `timestamp` | float | 自动 | `time.time()` |
@@ -38,7 +38,7 @@ class BusMessage:
 |------|-------|-------|----------|
 | `"user_input"` | `Channel.receive()` | `AgentLoop._consume()` | 用户消息（content, session_id, attachments） |
 | `"cancel"` | `Channel.receive()` | `AgentLoop._consume()` | `{ session_id }` |
-| `"agent_event"` | `AgentLoop._run()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}` |
+| `"agent_event"` | `AgentLoop._run()` / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}` |
 | `"global_event"` | `AgentLoop` 等 | `ChannelManager._dispatch_loop()` | 全局广播事件 `{type: "<event-type>", data: {...}}`，`to_channel` / `to_session` 固定为 `"*"` |
 
 ### data 内容（按 type）
@@ -67,21 +67,24 @@ class BusMessage:
 }
 ```
 
-`agent_event.data.type` 的取值见 [WebSocket 协议](/docs/ws-protocol) 事件类型列表。
+`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_input`，或 `send_message(kind="notify")` 产生的 `external_message`。
 
 ## 来源
 
-BusMessage 由以下 Channel 的 `receive()` 方法构造：
+BusMessage 的主要构造入口：
 
-| Channel | channel_id | 场景 |
-|---------|-----------|------|
-| `WebSocketChannel` | `"ws"` | 客户端发送 `user_input` / `cancel` 帧时 |
-| `SubagentChannel` | `"subagent"` | `task` 工具派发子任务时 |
+| 构造入口 | 场景 |
+|---------|------|
+| `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_input` / `cancel` |
+| `CronScheduler._tick()` | 构造 cron channel 的 `user_input` |
+| `AgentLoop._run()` | 构造 `agent_event`，包括 `user_input` echo 和 Agent 运行事件 |
+| `AgentLoop._publish_session_status()` | 构造 `global_event(session_status)` |
+| `send_message._do_notify()` | 构造 `agent_event(external_message)` |
 
 ## 消费
 
 - **inbound**（`type: "user_input"` / `"cancel"`）→ `AgentLoop._consume()` 消费
-- **outbound**（`type: "agent_event"`）→ `ChannelManager._dispatch_loop()` 按 `to_channel` 分发到对应 Channel
+- **outbound**（`type: "agent_event"` / `"global_event"`）→ `ChannelManager._dispatch_loop()` 分发；`global_event` 在 `to_channel == "*"` 时广播给所有 Channel
 
 ## 全局广播消息（global event）
 
@@ -165,6 +168,6 @@ WebSocketChannel.send()
 
 | 字段 | 类型 | 来源 | 说明 |
 |------|------|------|------|
-| `channel_id` | string | `ws_channel.send()` | 来源 Channel ID（`"ws"`） |
-| `session_id` | string | `ws_channel.send()` | 所属 session ID |
+| `channel_id` | string | `ws_channel.send()` | 目标 Channel ID，即 `msg.to_channel`；普通 ws 消息为 `"ws"`，`global_event` 为 `"*"` |
+| `session_id` | string | `ws_channel.send()` | 目标 Session ID，即 `msg.to_session`；普通 session 消息为具体 session_id，`global_event` 为 `"*"` |
 | `frame_id` | string | `ws_channel._on_message()` | 客户端上行帧 `id`，echo 回传给前端去重 |

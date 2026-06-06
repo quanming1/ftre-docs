@@ -25,9 +25,8 @@ export const docs: DocEntry[] = [
   { path: 'agent-events', title: 'Agent 事件协议', category: '协议' },
 
   // 插件
-  { path: 'plugin-overview', title: '插件概述', category: '插件' },
-  { path: 'plugin-api', title: 'Plugin API 参考', category: '插件' },
-  { path: 'plugin-hooks', title: 'Hook 挂点与上下文', category: '插件' },
+  { path: 'plugin-system', title: '插件系统', category: '插件' },
+  { path: 'plugin-builtins', title: '内置插件', category: '插件' },
 
   // 配置
   { path: 'config-file', title: 'config.json 配置', category: '配置' },
