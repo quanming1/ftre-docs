@@ -24,6 +24,9 @@ export const docs: DocEntry[] = [
   { path: 'bus-message', title: 'Bus 消息协议', category: '协议' },
   { path: 'agent-events', title: 'Agent 事件协议', category: '协议' },
 
+  // 指令
+  { path: 'commands', title: '指令系统', category: '指令' },
+
   // 插件
   { path: 'plugin-system', title: '插件系统', category: '插件' },
   { path: 'plugin-builtins', title: '内置插件', category: '插件' },

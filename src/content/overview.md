@@ -24,16 +24,15 @@ ftre 是一个 AI 编程助手平台，由以下组件构成：
 
 ```
 客户端 (ftre-desktop)
-  │ WebSocket / HTTP
+  │ WebSocket / HTTP API
   ▼
 Gateway (ftre)
-  │ EventBus
-  ├─ Channel Manager (ws / subagent / ...)
+  │
+  ├─ EventBus ─────────────────────────────┐
+  │    ├─ Channel Manager (ws / subagent / cron)
+  │    ├─ Agent Loop ──→ ReActAgent ──→ LLM (via LiteLLM)
+  │    └─ Cron Scheduler
+  │
   ├─ Session Manager (SQLite)
-  ├─ Plugin Manager (hooks + tools)
-  ├─ Agent Loop (ReActAgent)
-  └─ Cron Scheduler
-     │
-     ▼
-LLM (via LiteLLM)
+  └─ Plugin Manager (hooks + tools)
 ```

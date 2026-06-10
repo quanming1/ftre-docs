@@ -2,13 +2,13 @@
 
 ## 连接信息
 
-- **地址**: `ws://127.0.0.1:18790/`
+- **地址**: `ws://127.0.0.1:19470/`
 - **格式**: JSON 文本帧
 - **编码**: UTF-8
 
 ## 连接模型
 
-一条物理 WebSocket 可以关注多个 session（多 tab / 多会话同步），通过 `attach`/`detach` 帧声明。`user_input` 和 `cancel` 帧会**隐式 attach**当前 session，保持向后兼容。
+一条物理 WebSocket 可以关注多个 session（多 tab / 多会话同步），通过 `attach`/`detach` 帧声明。`user_input` 帧会**隐式 attach**当前 session，保持向后兼容。
 
 后端维护两个索引：
 
@@ -111,8 +111,8 @@
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `model` | string | LLM 模型名 |
-| `provider` | string | Provider 名称 |
+| `model` | string | 前端模型选择 UI 当前选中的 LLM 模型名 |
+| `provider` | string | 前端模型选择 UI 当前选中的 Provider 名称 |
 | `agent_id` | string | Agent ID（默认 `"code_agent"`） |
 | `session_id` | string | 当前 session（与 data.session_id 相同） |
 
@@ -122,7 +122,7 @@
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
 2. 隐式 attach 当前 session
 3. `frame.id` 写入 `metadata.frame_id`
-4. `data` + `metadata` → Bus inbound → AgentLoop
+4. `data` + `metadata` → `Channel.receive(..., kind="user_input")` → Bus inbound → AgentLoop
 
 **id 与 frame_id 的用途**：
 - 前端发送时生成 `id`，同时本地 push 一条乐观占位消息（`userMsg.id = frame.id`）
@@ -136,15 +136,9 @@
 
 ### 4. cancel — 取消生成
 
-```json
-{
-  "id": "abc123def456",
-  "type": "cancel",
-  "data": { "session_id": "ws::sess_xxx" }
-}
-```
+取消当前通过 `/cancel` 指令实现：前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)）。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。`/cancel` 是 ephemeral 指令，不持久化用户输入、不 echo，只调用 `agent.cancel_nowait()`；被取消的 Agent 自身产出 `done(success=false, reason="cancelled")` 作为最终信号。
 
-**行为**：AgentLoop 收到后调用 `agent.cancel_nowait()` 中断执行。隐式 attach 当前 session。
+> `type: "cancel"` 帧（`data: { session_id }`）在 Bus 层仍被 `AgentLoop._step_run()` 处理，但当前 `ws_channel` 不直接路由该帧类型。`websocket-client.ts` 里保留了 `sendCancel()` 历史方法，但当前 chat store 不再调用它；若未来需要取消帧，可通过其他 Channel 或扩展 ws_channel 实现。
 
 ---
 
@@ -195,7 +189,7 @@
 ```
 
 **用途**：
-1. **本地去重**：前端自己发的消息已有本地占位（同 `id`），echo 跳过渲染，但仍会设置 `isBusy = true`、清空 `error` 和 `retryState`（一轮对话开始的统一信号）
+1. **本地去重**：前端自己发的消息已有本地占位（同 `id`），echo 跳过渲染；`isBusy`、`error`、`retryState` 的实际切换由 `session_status` 全局事件负责（见下方全局广播）
 2. **跨 session 唤起**：当 `send_message` 工具触发远端 session 时，目标前端没有本地占位，echo 负责渲染用户气泡
 3. **多端同步**：其他客户端也能看到用户消息
 
@@ -308,7 +302,7 @@
 | `error` | string \| null | 非 null 表示执行失败 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
 | `error_code` | string \| null | 错误码；当前 `ToolHandler` 调用时未传入，通常为 `null` |
-| `metadata` | object | 预留的工具附加元数据字段；当前 `ToolHandler` 调用 `tool_result_event()` 时未传入，通常不存在 |
+| `metadata` | object | 预留的工具附加元数据字段；当前 `ToolHandler` 不会把中间件 after 钩子补充的 metadata 传给 `tool_result_event()`，因此通常不存在 |
 
 **前端处理**：
 - 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`）
@@ -397,7 +391,8 @@
 **前端处理**：
 - 关闭当前 streaming assistant 的 `streaming` 状态
 - push 一条 `isError = true` 的消息
-- 设置 `error` + `isBusy = false`
+- 设置 `error`
+- `isBusy` 的实际切换由紧随其后的 `session_status(idle)` 全局事件负责
 
 常见错误码：`network`, `timeout`, `internal_server_error`, `content_filter`, `auth_error`
 
@@ -447,27 +442,38 @@
 }
 ```
 
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `success` | bool | 是否成功 |
+| `reason` | string | `"completed"`（正常完成）/ `"command"`（指令完成）/ `"max_iterations"` / `"error"` / `"cancelled"` |
+| `usage` | object | 总 Token 用量（可选） |
+
 **前端处理**：
 - `sealStreamingPart()` 封口所有流式 parts
 - 设置 `streaming = false`
 - 当前前端会将仍处于 running/pending 的 toolCalls 标记为 `"ok"`
-- `isBusy = false` → 解除输入框锁定
+- 清空 `retryState`
+- `isBusy` 的实际切换由紧随其后的 `session_status(idle)` 全局事件负责
 
 #### context_compact_start / context_compact_done / context_compact_failed
 
-上下文压缩实时事件，插入/更新 `compact` 状态消息到消息列表。
+上下文压缩实时事件，插入/更新 `compact` 状态消息到消息列表。自动压缩路径由 `before_messages_build` hook 在 Agent 正式运行前触发；手动 `/compact` 路径由指令 handler 触发。
 
 **context_compact_start** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `tokens` | number \| undefined | 压缩前的 token 数（可选） |
+| `ratio` | number \| undefined | 当前 token 水位比例（如 `0.83`） |
+| `threshold` | number \| undefined | 触发阈值（如 `0.8`） |
+| `tokens` | number \| undefined | 压缩前的 token 数（自动压缩路径） |
+| `events` | number \| undefined | 压缩前事件数（手动 `/compact` 路径） |
 
 **context_compact_done** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `tokens_before` | number \| undefined | 压缩前的 token 数（可选） |
+| `events_before` | number \| undefined | 压缩前事件数（可选） |
 | `summary` | string \| undefined | 压缩后的摘要预览（可选） |
 
 **context_compact_failed** data：
@@ -529,7 +535,7 @@
 
 后端分发不走 per-session 的 `attach` 索引，而是扇出给所有活跃连接，因此**无需 attach 也能收到**。详见 [Bus 消息协议 — 全局广播消息](/docs/bus-message)。
 
-**前端分流**：在 WebSocket 入口按顶层 `type` 分流。`agent_event` 进 `applyEvent`（按 session 路由到消息流），`global_event` 不进消息流；当前 `chat.ts` 已消费 `session_status`，收到后触发会话列表 store 重新拉取 `GET /api/sessions`，从而刷新运行态。当前前端不是维护本地 `sessionId → status` 增量映射，而是用 WebSocket 信号触发 HTTP 刷新。
+**前端分流**：在 WebSocket 入口按顶层 `type` 分流。`agent_event` 进 `applyEvent`（按 session 路由到消息流），`global_event` 不进消息流；当前 `chat.ts` 已消费 `session_status`，收到后会更新对应 chat bucket 的 busy 状态，并触发会话列表 store 重新拉取 `GET /api/sessions`，从而刷新列表中的运行态。
 
 ### session_status — session 运行态变化
 
@@ -553,18 +559,19 @@
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `session_id` | string | 状态变化的 session ID（在 data 内，因为帧本身不绑定单一 session） |
-| `status` | string | `"running"`（Agent 开始运行）/ `"idle"`（Agent 结束运行） |
+| `status` | string | `"running"`（Agent 或指令开始执行）/ `"idle"`（执行结束） |
 
 **何时发出**：
-- `running`：`user_input` 被 `AgentLoop` 受理、Agent 进入活跃态时（在 `user_input` echo 之前）
-- `idle`：Agent 执行结束时（在 `done` 之后，正常 / 错误 / 取消 / 超迭代都会发）
+- `running`：`user_input` 被 `AgentLoop` 受理时（Agent 执行路径在 `user_input` echo 之前；普通指令路径在命令产出结果时）
+- `idle`：Agent / 指令执行结束时（在 `done` 之后，正常 / 错误 / 取消 / 超迭代都会发）
 
 **前端处理**：
 - 不入消息流、不持久化，是瞬时控制信号
-- `chat.ts` 收到 `session_status` 后触发 `useSession.loadAllSessions()`，由 HTTP `GET /api/sessions` 重新获取会话列表运行态
+- `chat.ts` 收到 `session_status` 后更新对应 session bucket 的 `isBusy`；`running` 还会清空上一轮 `error` / `retryState`
+- 同时触发 `useSession.loadAllSessions()`，由 HTTP `GET /api/sessions` 重新获取会话列表运行态
 - 初始态同样通过 HTTP `GET /api/sessions` 获取
 
-**当前状态**：后端已完整实现 global_event 的生成与扇出；前端已消费 `session_status`，但消费方式是把它作为刷新会话列表的触发信号，而不是直接维护本地增量状态表。
+**当前状态**：后端已完整实现 global_event 的生成与扇出；前端已消费 `session_status`，用于同步当前会话 busy 状态，并作为刷新会话列表的触发信号。
 
 **注意**：`session_status` 不在 `PERSISTENT_EVENTS` 中，不写入 DB，历史回放（`GET /api/sessions/:id/messages`）不会出现。
 
@@ -682,10 +689,12 @@
 |------|-----------|------|
 | `"text"` | string | 纯文本内容 |
 | `"skill"` | string | 用户选中的 Skill 名称 |
-| `"code_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略 |
-| `"archive_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略 |
+| `"code_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略（前端仅作为本地引用 UI 展示） |
+| `"archive_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略（前端仅作为本地引用 UI 展示） |
+| `"email"` | object | 前端类型中保留的邮件消息段；当前后端 `_content_to_text` 会忽略 |
+| `"image"` | object | 前端本地渲染用图片段；上送给后端时实际拆到 `attachments` 字段，当前后端 `_content_to_text` 不处理此 part |
 
-当前后端 `_content_to_text` 实际只处理 `text` 和 `skill`，其它 part 会被忽略。
+当前后端 `_content_to_text` 实际只处理 `text` 和 `skill`，其它 part 会被忽略；图片输入由 `attachments` 字段处理。
 
 **后端归一化（`_content_to_text`）**：
 - string → 直接使用
@@ -708,7 +717,7 @@
 [来自 <channel>::<session> 的消息] <content>
 ```
 
-格式为 `role: "assistant", name: _safe_name(src)`。其中 `_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符（例 `ws::sess_xxx` → `ws_sess_xxx`）。
+格式为 `role: "assistant", name: _safe_name(src)`。其中 `_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符（例 `ws::sess_xxx` → `ws__sess_xxx`）。
 
 ### attach / detach — 无确认响应
 
@@ -733,7 +742,7 @@
 | DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
 | GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；`USER_INPUT` 历史事件来自这里） |
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
-| GET | `/api/workspaces` | 列出工作区 |
+| GET | `/api/workspaces` | 列出工作区（支持 `channel_id` 过滤；默认 `ws`） |
 | GET | `/api/skills` | 列出所有 Skill 元信息 |
 | GET | `/api/skills/:name` | 读取单个 Skill 完整信息 |
 | POST | `/api/skills` | 创建 Skill |
@@ -746,4 +755,4 @@
 | DELETE | `/api/cron/:job_id` | 删除 Cron 任务 |
 | GET | `/api/commands` | 返回已注册的斜杠指令列表 |
 
-`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数不会被后端读取。
+`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数。

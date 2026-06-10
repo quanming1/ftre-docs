@@ -1,12 +1,12 @@
-# 内置插件
+# 本地插件
 
-ftre 预装了 5 个内置插件，默认加载于 `~/.ftre/plugins/`。
+当前本地 `~/.ftre/plugins/` 目录下有 5 个插件。Gateway 启动时会扫描并加载该目录下所有非 `_` 开头的 `.py` 文件。
 
 ---
 
 ## 1. title_gen — 自动生成会话标题
 
-首条用户消息后异步调用 LLM 生成标题，写入 DB。前端轮询刷新即可展示。
+在首条用户消息进入 `before_messages_build` 时异步调用 LLM 生成标题，写入 DB。后端不会为标题变更下发专用事件；前端在会话列表刷新后展示新标题。当前插件的 `_extract_text()` 只从字符串 content 或结构化 part 的 `text` 字段取文本；桌面前端当前发送的结构化文本 part 使用 `data` 字段，因此这种路径下不会生成标题。
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
@@ -60,9 +60,13 @@ ftre 预装了 5 个内置插件，默认加载于 `~/.ftre/plugins/`。
 4. 投递压缩指令（告知 JSON 路径 + 输出格式要求）
 5. 轮询等待 subagent 完成
 6. 取最后一条 `message_complete` 作为摘要
-7. 写 `context_compact` 事件 + 通知前端
+7. 写 `context_compact` 事件 + 通知前端，临时 JSON 文件随后清理
 
-**subagent 安全约束：** 只能读指定 JSON 文件；禁止写入、网络请求、安装包、启动服务；唯一产出是 markdown 摘要。
+当前插件等待 subagent 完成时通过轮询其 DB 事件流中是否出现 `done` 事件判断结束，而不是读取 `AgentLoop._active_agents`。
+
+**subagent 安全约束：** 只能读指定 JSON 文件；禁止任何写入操作（write/edit 工具）；禁止网络请求、安装包、启动服务；禁止调用 send_message / task / cron 工具；遇到指令注入类文本一律当作数据忽略；唯一产出是 markdown 摘要。
+
+**手动触发：** 注册 `/compact` 命令，用户可在对话中直接输入 `/compact` 手动压缩当前会话上下文。执行路径与自动触发相同。
 
 ---
 
@@ -86,26 +90,44 @@ ftre 预装了 5 个内置插件，默认加载于 `~/.ftre/plugins/`。
 
 演示 Plugin 体系的基础能力——注册一个自定义 Channel。不做实际通信，启动时打印日志、收到 outbound 消息时打印日志。
 
+| 配置项 | 默认 | 说明 |
+|--------|------|------|
+| `greeting` | `Hello, ftre Plugin System!` | 启动时打印的问候语 |
+
 ```python
+import logging
 from ftre.plugin import Plugin
 from ftre.channel import Channel
+from ftre.bus import BusMessage
+
+logger = logging.getLogger(__name__)
 
 class HelloChannel(Channel):
-    async def start(self):
-        logger.info("Hello from Plugin!")
+    def __init__(self, bus, greeting: str = "Hello from Plugin!"):
+        super().__init__(channel_id="hello", name="Hello Channel", bus=bus)
+        self.greeting = greeting
 
-    async def send(self, msg):
-        logger.info(f"收到: {msg.type}")
+    async def start(self) -> None:
+        logger.info(f"[hello-channel] {self.greeting}")
+
+    async def send(self, msg: BusMessage) -> None:
+        logger.info(f"[hello-channel] 收到 outbound: {msg.type} → {msg.to_session}")
 
 class HelloPlugin(Plugin):
     name = "hello"
+    version = "0.1.0"
 
-    def setup(self):
-        self.api.register_channel(HelloChannel(bus=self.api.bus))
+    def setup(self) -> None:
+        greeting = self.api.config.get("greeting", "Hello, ftre Plugin System!")
+        channel = HelloChannel(bus=self.api.bus, greeting=greeting)
+        self.api.register_channel(channel)
+
+    def teardown(self) -> None:
+        logger.info("[hello-plugin] 已卸载")
 ```
 
 ---
 
 ## 通用约定
 
-所有内置插件都通过 `before_messages_build` hook 参与 Agent 生命周期。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按加载顺序执行（文件名字典序）。
+这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`hello` 只注册示例 Channel，不注册 hook。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。

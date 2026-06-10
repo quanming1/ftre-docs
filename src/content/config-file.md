@@ -82,7 +82,19 @@
         "skills_dir": "C:\\Users\\用户名\\.ftre\\skills"
       }
     }
-  ]
+  ],
+  "servers": {
+    "gateway": {
+      "host": "127.0.0.1",
+      "port": 19470
+    },
+    "frontend": {
+      "port": 19471
+    },
+    "docs": {
+      "port": 19472
+    }
+  }
 }
 ```
 
@@ -93,6 +105,7 @@
   agents        → Agent 默认配置
   providers     → LLM Provider 列表
   plugins       → 插件配置
+  servers       → Gateway / 前端 / 文档开发服务端口配置
 }
 ```
 
@@ -124,10 +137,11 @@
 |------|------|:---:|------|
 | `api_key` | string | 是 | API 密钥 |
 | `api_base` | string | 否 | 自定义端点 |
-| `api_protocol` | string | 否 | 决定 LiteLLM 模型名前缀，默认 `"openai"`。当前内置映射支持：`"openai"` / `"anthropic"` / `"gemini"` / `"azure"` / `"bedrock"`；其它值会回退为 `openai` 前缀 |
+| `api_protocol` | string | 否 | 决定 LiteLLM 模型名前缀，默认 `"openai"`。当前内置映射支持：`"openai"` / `"anthropic"` / `"gemini"` / `"azure"` / `"bedrock"` / `"minimax"`；其它值会回退为 `openai` 前缀 |
 | `models` | array | 是 | 可用模型列表 |
 
 > `api_protocol` 决定 LiteLLM 模型名的 provider 前缀（如 `openai/gpt-4o`）。如果模型 id 本身已含已知 LiteLLM 前缀（如 `openai/`、`deepseek/`、`groq/` 等），则不会重复拼接。
+> 当前配置文件没有生效的 `api_type` 字段；虽然 `LLMHandler` 内部支持 `"completions"` / `"responses"` 适配器，但 `load_config()` 构造出的 `LLMConfig.api_type` 仍使用默认值 `"completions"`。
 
 ### Model 条目
 
@@ -150,8 +164,22 @@
 | `gemini` | `gemini/<id>` | `gemini/gemini-2.5-pro` |
 | `azure` | `azure/<id>` | `azure/my-deployment` |
 | `bedrock` | `bedrock/<id>` | `bedrock/anthropic.claude-3-sonnet` |
+| `minimax` | `minimax/<id>` | `minimax/abab6.5s-chat` |
 
-> 如果 `id` 本身已含已知 LiteLLM 前缀（如 `openai/gpt-4o`、`deepseek/deepseek-chat`），则**不再重复拼接**。这适用于网关模型名本身已带前缀的场景。当前白名单包括 `openai/`, `anthropic/`, `azure/`, `gemini/`, `bedrock/`, `groq/`, `vertex_ai/`, `ollama/`, `huggingface/`, `cohere/`, `mistral/`, `deepseek/`, `together_ai/`, `replicate/`。
+> 如果 `id` 本身已含已知 LiteLLM 前缀（如 `openai/gpt-4o`、`deepseek/deepseek-chat`），则**不再重复拼接**。这适用于网关模型名本身已带前缀的场景。当前白名单包括 `openai/`, `anthropic/`, `azure/`, `gemini/`, `bedrock/`, `minimax/`, `groq/`, `vertex_ai/`, `ollama/`, `huggingface/`, `cohere/`, `mistral/`, `deepseek/`, `together_ai/`, `replicate/`。
+
+## servers
+
+`servers` 是可选配置。未配置时后端默认使用 Gateway `127.0.0.1:19470`，并提供前端开发服务 `19471`、文档开发服务 `19472` 两个约定值。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `gateway.host` | string | 否 | Gateway 监听地址，默认 `"127.0.0.1"` |
+| `gateway.port` | int | 否 | Gateway WebSocket / HTTP API 端口，默认 `19470` |
+| `frontend.port` | int | 否 | 前端开发服务端口约定值，默认 `19471` |
+| `docs.port` | int | 否 | 文档开发服务端口约定值，默认 `19472` |
+
+> 当前后端代码只在启动 Gateway 时读取 `servers.gateway` 并传给 `WebSocketChannel`。桌面前端仓库当前 Vite 开发服务端口写在 `packages/renderer/vite.config.ts`，实际为 `50000`，不会读取这里的 `servers.frontend`；文档仓库当前 Vite 配置也不会读取 `servers.docs`。
 
 ## plugins
 
@@ -164,7 +192,6 @@
 
 ## 加载过程
 
-1. Gateway 启动 → `load_config_file()` 读取 `~/.ftre/config.json`
-2. `_build_llm_config(data, provider, model)` 构造默认 LLM 配置
-3. `PluginManager.load_all(config_data)` 扫描 `~/.ftre/plugins/` 加载插件
-4. 每个插件匹配 `plugins[]` 中同名条目的 `config` 传入
+1. Gateway 启动 → `load_config_file()` 读取 `~/.ftre/config.json` 原始 JSON
+2. `PluginManager.load_all(config_data)` 扫描 `~/.ftre/plugins/` 加载插件，每个插件匹配 `plugins[]` 中同名条目的 `config` 传入
+3. AgentLoop 处理消息时调用 `load_config()` → 内部 `_build_llm_config()` 构造 LLM 配置

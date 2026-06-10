@@ -84,6 +84,12 @@ class MyPlugin(Plugin):
 | `bus` | EventBus | 消息总线 |
 | `session_manager` | SessionManager | Session 和消息的持久化 |
 | `channel_manager` | ChannelManager | Channel 注册和分发 |
+| `command_manager` | CommandManager | 斜杠指令注册器，通常通过 `register_command()` 使用；如需 `ephemeral=True` 可直接调用 `command_manager.register()` |
+| `event_loop` | AbstractEventLoop | 主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`） |
+| `_hook_manager` | HookManager | 内部 hook 管理器，通常通过 `register_hook()` 使用 |
+| `_tool_registry` | ToolRegistry | 内部工具注册表，通常通过 `register_tool()` 使用 |
+
+`FtrePluginApi` 还提供 `registerTool(tool)` 作为 `register_tool(tool)` 的 camelCase 别名。
 
 ### register_tool(tool)
 
@@ -112,15 +118,40 @@ from ftre.channel import Channel
 from ftre.bus import BusMessage
 
 class MyChannel(Channel):
+    def __init__(self, bus):
+        super().__init__(channel_id="my_channel", name="My Channel", bus=bus)
+
     async def send(self, msg: BusMessage) -> None:
         pass  # 推送到外部
 
 self.api.register_channel(MyChannel(bus=self.api.bus))
 ```
 
+Channel 基类的 `__init__` 需要三个参数：
+- `channel_id`: 唯一标识符，用于消息路由
+- `name`: 显示名称
+- `bus`: EventBus 实例
+
+### register_command(command, handler, *, description="", args_hint="")
+
+注册一条普通斜杠指令，供命令面板和 AgentLoop 指令 pipeline 使用：
+
+```python
+def my_command(ctx):
+    ctx.meta.update(result="处理完成")
+
+self.api.register_command(
+    "/my",
+    my_command,
+    description="执行我的插件指令",
+)
+```
+
+`register_command()` 不暴露 `ephemeral` 参数；需要注册不入库、不 echo 的控制类指令时，可直接访问 `self.api.command_manager.register(..., ephemeral=True)`。
+
 ### register_hook(point, fn)
 
-在生命周期挂点注册钩子。当前内置挂点只有 `before_messages_build`：
+在生命周期挂点注册钩子。当前框架内置并自动触发的挂点只有 `before_messages_build`：
 
 ```python
 from ftre.plugin import BEFORE_MESSAGES_BUILD
@@ -150,7 +181,8 @@ self.api.register_hook(BEFORE_MESSAGES_BUILD, my_hook)
 | `events` | list | 事件流（可修改：裁剪/注入/重排） |
 | `config` | AgentConfig | 配置副本（可改 system_prompt / model / llm 等） |
 | `inbound_data` | dict | 当前用户消息的原始 data |
-| `event_loop` | AbstractEventLoop | 当前事件循环 |
+
+`MessagesBuildContext` 当前只包含上述字段；`hook_manager.py` 注释里提到的 `event_loop` 不在 `ctx` 上。插件如需访问 asyncio 事件循环（用于 `run_coroutine_threadsafe`），请通过 `self.api.event_loop` 获取。
 
 **使用示例：**
 
@@ -167,12 +199,12 @@ def my_hook(ctx):
 
 ### 自定义 Hook
 
-可以通过 `HookManager.trigger()` 手动触发自定义挂点，供其他插件订阅。调用方式：
+`HookManager` 只提供同步触发接口 `trigger_sync(point, ctx)`。框架当前只会自动触发 `before_messages_build`；如果你在扩展代码里手动触发自定义挂点，可复用同一个 HookManager：
 
 ```python
 from ftre.plugin import HookManager
 
-hook_manager.trigger("my_custom_point", ctx)
+hook_manager.trigger_sync("my_custom_point", ctx)
 ```
 
 ---
@@ -239,6 +271,7 @@ class MyTool(Tool):
 
 - 文件名不要以 `_` 开头（会被跳过）
 - 插件类必须继承 `Plugin`，设置非空 `name`
-- `setup()` 必须实现
+- `setup()` 必须实现；`teardown()` 可选，基类默认空实现
 - hook 函数抛异常会被捕获跳过，不会拖垮主流程
+- 同名插件只加载第一个，后续同名插件会被跳过
 - `Injected` 只能作为参数默认值使用（如 `x=Injected("x")`），不要写成类型注解
