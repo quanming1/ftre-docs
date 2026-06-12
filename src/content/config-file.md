@@ -46,7 +46,7 @@
         }
       ]
     },
-    "DeepSeek 官方": {
+    "DeepSeek官方": {
       "api_key": "sk-xxx",
       "api_base": "https://api.deepseek.com/v1",
       "api_protocol": "openai",
@@ -85,14 +85,11 @@
   ],
   "servers": {
     "gateway": {
-      "host": "127.0.0.1",
+      "host": "0.0.0.0",
       "port": 19470
     },
     "frontend": {
-      "port": 19471
-    },
-    "docs": {
-      "port": 19472
+      "port": 50000
     }
   }
 }
@@ -114,76 +111,69 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
 | `provider` | string | 是 | 默认 Provider 名，对应 `providers` 的 key |
-| `model` | string | 是 | 默认模型 ID，对应 provider 下 `models[].id` |
-| `workspace` | string | 否 | 默认工作区，新 session 自动使用。空则走进程 cwd |
-| `title_generation` | object | 否 | 标题生成专用 LLM。不配则沿用主 LLM |
+| `model` | string | 是 | 默认模型 ID。仅当 `provider` 存在且 `model` 非空时，运行时才会把该 ID 作为实际 LLM `model` 传入；若 `providers[provider].models[]` 中存在同名条目，则额外读取其 `name` / `context_window` / `max_output` / `vision` 等元数据。Provider 存在但找不到模型条目时仍会使用该 `model`，只是这些元数据为空/默认值；Provider 不存在或 model 为空时会得到空 LLM 配置 |
+| `workspace` | string | 否 | 默认工作区。创建 session 时不会自动写入该字段；Agent 执行时按 `session.workspace` → `agents.defaults.workspace` → 进程 cwd 的顺序选择工作区，`set_workspace` 工具会把当前 session 的 `workspace` 写回数据库 |
+| `title_generation` | object | 否 | 标题生成专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会构造 `AgentConfig.title_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，标题生成仍会使用该 model，只是展示和能力元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型，回退主 LLM |
 
 ### title_generation（可选）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `provider` | string | Provider 名 |
-| `model` | string | 模型 ID |
+| `model` | string | 标题生成模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时仍会启用该标题模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型 |
 
 > 标题生成是高频小请求，建议指向便宜/快的模型（如 `gpt-4o-mini`），避免占用主对话的高级模型配额。
 
 ## providers
 
-`providers` 是一个 map，key 是 Provider 名称（任意字符串，前端展示用），value 是 Provider 配置。
+`providers` 是一个 map，key 是 Provider 名称，value 是 Provider 配置。后端按普通 JSON key 读取；桌面端 ModelSettings UI 新建/保存 Provider 时当前只允许中文、英文、数字、下划线（不允许空格），因此通过 UI 管理的 Provider 名应遵守该限制。
 
 ### Provider 配置
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `api_key` | string | 是 | API 密钥 |
-| `api_base` | string | 否 | 自定义端点 |
-| `api_protocol` | string | 否 | 决定 LiteLLM 模型名前缀，默认 `"openai"`。当前内置映射支持：`"openai"` / `"anthropic"` / `"gemini"` / `"azure"` / `"bedrock"` / `"minimax"`；其它值会回退为 `openai` 前缀 |
-| `models` | array | 是 | 可用模型列表 |
+| `api_key` | string | 后端否 / 桌面端 UI 是 | API 密钥；后端缺省为空字符串，是否可用取决于目标 OpenAI 兼容端点；桌面端 ModelSettings UI 保存时当前要求填写 |
+| `api_base` | string | 后端否 / 桌面端 UI 是 | 自定义端点（传给 OpenAI SDK 的 `base_url`）；桌面端 ModelSettings UI 保存时当前要求填写 |
+| `api_protocol` | string | 后端否 / 桌面端 UI 是 | 配置记录字段，标识 LLM 协议类型。默认 `"openai"`；当前只作为 `_build_model_name(model_id, protocol)` 的入参，但 `_build_model_name()` 直接返回配置中的模型名，不会根据 `api_protocol` 拼接前缀；该字段不会设置 `LLMConfig.api_type`。桌面端 UI 当前会展示多个协议选项并要求选择，但运行时仍不因此切换协议 |
+| `models` | array | 后端否 / 桌面端 UI 是 | 可用模型列表，供前端展示，并供后端按 `id` 匹配默认模型/标题模型以读取 `name` / `context_window` / `max_output` / `vision` 等元数据。当前后端不要求被选中的模型必须存在于此列表；只要 Provider 存在且模型 ID 非空，找不到条目时仍会使用配置中的模型 ID，只是对应元数据为空/默认值。桌面端 ModelSettings UI 保存时当前要求至少配置一个模型 |
 
-> `api_protocol` 决定 LiteLLM 模型名的 provider 前缀（如 `openai/gpt-4o`）。如果模型 id 本身已含已知 LiteLLM 前缀（如 `openai/`、`deepseek/`、`groq/` 等），则不会重复拼接。
-> 当前配置文件没有生效的 `api_type` 字段；虽然 `LLMHandler` 内部支持 `"completions"` / `"responses"` 适配器，但 `load_config()` 构造出的 `LLMConfig.api_type` 仍使用默认值 `"completions"`。
+> `api_protocol` 当前仅作为配置记录字段（默认 `"openai"`）。它会被读出并传给 `_build_model_name(model_id, protocol)`，但 `_build_model_name()` 直接返回 `model_id`，不做前缀拼接，因此实际上不影响模型名。当前通过 `config.json` 无法切换 `LLMConfig.api_type`；`load_config()` 构造出的 `LLMConfig.api_type` 始终使用 dataclass 默认值 `"completions"`，运行时使用 OpenAI Chat Completions 流式接口。
 
 ### Model 条目
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 是 | 模型 ID，用于 `agents.defaults.model` 匹配。通常填写 Provider 原生 ID；也允许填写已带已知 LiteLLM provider 前缀的 ID（如 `openai/gpt-4o`、`deepseek/deepseek-chat`），此时内部不会重复拼接前缀 |
+| `id` | string | 是 | 模型条目 ID，用于与 `agents.defaults.model` / `title_generation.model` 匹配以补充展示和能力元数据。`_build_model_name()` 直接返回配置里的模型名，不做前缀拼接 |
 | `name` | string | 否 | 展示名称 |
-| `context_window` | int | 否 | 上下文窗口大小（token 数） |
-| `max_output` | int | 否 | 最大输出 token 数 |
+| `context_window` | int | 后端否 / 桌面端 UI 是 | 上下文窗口大小（token 数）；后端缺省时为 `None`，桌面端 ModelSettings UI 保存时当前要求填写正数 |
+| `max_output` | int | 后端否 / 桌面端 UI 是 | 最大输出 token 数；后端缺省时为 `None`，桌面端 ModelSettings UI 保存时当前要求填写正数 |
 | `vision` | bool | 否 | 是否支持图片输入 |
 
 #### 模型 ID 命名规则
 
-`id` 填写 Provider 原始模型名即可。ftre 内部会通过 `_build_model_name()` 自动拼接 LiteLLM 前缀：
+`agents.defaults.model` / `title_generation.model` 填写 Provider 端点所识别的原始模型名。当前 `ftre` 使用 OpenAI SDK 通过 `api_base` 指向兼容端点，`_build_model_name()` 函数直接返回该模型名（不做任何前缀拼接）。`providers[].models[].id` 主要用于前端展示，以及供后端匹配并补充 `name` / `context_window` / `max_output` / `vision` 等元数据；只要 Provider 存在且模型 ID 非空，即使没有匹配条目，`_build_llm_config()` 仍会使用配置中的模型 ID 构造 `LLMConfig.model`，只是这些元数据为空/默认值。Provider 不存在或模型 ID 为空时会返回空 LLM 配置。注意桌面端 ModelSettings UI 当前只能从 `models[]` 中选择默认模型/标题模型，因此通过 UI 操作时通常仍需先把模型写入列表：
 
-| 协议 | 拼接规则 | 示例 |
-|------|---------|------|
-| `openai` | `openai/<id>` | `openai/gpt-4o` |
-| `anthropic` | `anthropic/<id>` | `anthropic/claude-sonnet-4` |
-| `gemini` | `gemini/<id>` | `gemini/gemini-2.5-pro` |
-| `azure` | `azure/<id>` | `azure/my-deployment` |
-| `bedrock` | `bedrock/<id>` | `bedrock/anthropic.claude-3-sonnet` |
-| `minimax` | `minimax/<id>` | `minimax/abab6.5s-chat` |
+- 使用 OpenAI 兼容端点时，可直接填 `gpt-4o`、`deepseek-v4-pro` 等；建议在 `models[].id` 中放置同名条目，以便前端展示并让后端读取上下文窗口、视觉能力等元数据
+- 如果目标端点需要特殊的 provider 前缀格式，在 `agents.defaults.model` / `title_generation.model` 中完整填写该字符串；如需前端展示和能力元数据，也在 `models[].id` 中填写同一个字符串
 
-> 如果 `id` 本身已含已知 LiteLLM 前缀（如 `openai/gpt-4o`、`deepseek/deepseek-chat`），则**不再重复拼接**。这适用于网关模型名本身已带前缀的场景。当前白名单包括 `openai/`, `anthropic/`, `azure/`, `gemini/`, `bedrock/`, `minimax/`, `groq/`, `vertex_ai/`, `ollama/`, `huggingface/`, `cohere/`, `mistral/`, `deepseek/`, `together_ai/`, `replicate/`。
+> 当前 `api_protocol` 字段虽然存在于 Provider 配置中（默认 `"openai"`），但 `_build_model_name()` 未使用它来拼接前缀。这意味着 `api_protocol` 仅作为配置记录，不影响实际模型名构造，也不会改变 `LLMConfig.api_type`。
 
 ## servers
 
-`servers` 是可选配置。未配置时后端默认使用 Gateway `127.0.0.1:19470`，并提供前端开发服务 `19471`、文档开发服务 `19472` 两个约定值。
+`servers` 是可选配置。未配置时后端默认使用 Gateway `0.0.0.0:19470`（`WebSocketChannel` 硬编码默认值）；前端开发服务实际端口由 `packages/renderer/vite.config.ts` 硬编码为 `50000`（非 `servers.frontend.port` 控制），文档开发服务端口同理由各自的开发服务配置文件控制；后端代码不使用 `servers` 中的任何端口。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `gateway.host` | string | 否 | Gateway 监听地址，默认 `"127.0.0.1"` |
+| `gateway.host` | string | 否 | Gateway 监听地址，默认 `"0.0.0.0"` |
 | `gateway.port` | int | 否 | Gateway WebSocket / HTTP API 端口，默认 `19470` |
-| `frontend.port` | int | 否 | 前端开发服务端口约定值，默认 `19471` |
-| `docs.port` | int | 否 | 文档开发服务端口约定值，默认 `19472` |
+| `frontend.port` | int | 否 | 前端开发服务端口约定值。当前未被前端代码读取，实际端口由 `packages/renderer/vite.config.ts` 硬编码为 `50000` |
+| `docs.port` | int | 否 | 文档开发服务端口约定值。当前未被代码读取 |
 
-> 当前后端代码只在启动 Gateway 时读取 `servers.gateway` 并传给 `WebSocketChannel`。桌面前端仓库当前 Vite 开发服务端口写在 `packages/renderer/vite.config.ts`，实际为 `50000`，不会读取这里的 `servers.frontend`；文档仓库当前 Vite 配置也不会读取 `servers.docs`。
+> 当前后端代码**未读取** `servers` 配置。Gateway 使用 `WebSocketChannel` 的硬编码默认值 `host="0.0.0.0"`、`port=19470`。`frontend.port` 当前未被前端代码读取，实际开发服务端口由 `packages/renderer/vite.config.ts` 硬编码为 `50000`；`docs.port` 同理未被读取。
 
 ## plugins
 
-> 注意：`plugins[]` 不是插件启用列表。Gateway 会扫描并加载 `~/.ftre/plugins/` 下所有 `.py` 插件；`plugins[]` 仅用于给同名插件传入 `config`。未出现在 `plugins[]` 中的插件仍会加载，只是收到空配置。
+> 注意：`plugins[]` 不是插件启用列表。Gateway 会扫描并加载 `~/.ftre/plugins/` 下所有非 `_` 开头的 `.py` 插件；`plugins[]` 仅用于给同名插件传入 `config`。未出现在 `plugins[]` 中的插件仍会加载，只是收到空配置。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
@@ -195,3 +185,5 @@
 1. Gateway 启动 → `load_config_file()` 读取 `~/.ftre/config.json` 原始 JSON
 2. `PluginManager.load_all(config_data)` 扫描 `~/.ftre/plugins/` 加载插件，每个插件匹配 `plugins[]` 中同名条目的 `config` 传入
 3. AgentLoop 处理消息时调用 `load_config()` → 内部 `_build_llm_config()` 构造 LLM 配置
+
+> **注意**：步骤 3 中 `load_config()` 每次处理 **`user_input` 类型**消息时都会重新从磁盘读取 `config.json`——Pipeline 的 `_step_compact`（自动压缩水位检测）和 `_run_async`（Agent 执行）都会调用 `_load_current_config()`；`cancel` 类型消息在 `_step_run` 中直接走 `cancel_nowait()` 分支，不触发配置重读取；命中斜杠指令（如 `/compact`）的消息也不会触发配置重读取（`command_hit=True` 时 `_step_compact` 与 `_step_run` 的 elif 分支均被跳过，不调用 `_load_current_config()`）。因此修改 providers/agents 配置后无需重启 Gateway 即可生效。但步骤 2 的插件配置只在启动时注入一次，修改 `plugins[]` 需重启才能生效。

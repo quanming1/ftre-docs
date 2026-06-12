@@ -1,6 +1,6 @@
 # Agent 事件协议
 
-Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。所有事件格式为 `{"type": "<EventType>", "data": { ... }}`，由 `ReActAgent.run()` 的 Generator 逐条 yield。
+Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。所有事件格式为 `{"type": "<EventType>", "data": { ... }}`，由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。本页主要描述 core `ReActAgent` 事件；`AgentLoop`、命令、压缩与工具层注入的扩展事件会在相应章节单独说明。
 
 ## 事件类型总览
 
@@ -11,11 +11,8 @@ Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。�
 | `reasoning` | LLM 思考文本片段 | 支持 thinking 的模型输出 reasoning |
 | `reasoning_complete` | LLM 思考文本完成 | 流式收束 / 工具调用前 |
 | `tool_call` | 工具调用 | 解析 LLM 返回的 tool_calls 后 |
-| `tool_call_streaming` | 工具调用参数流式增量 | `StreamDelta.tool_calls` 到达时产出；当前主要来自 Chat Completions 流式接口，Responses 适配器当前只在完成后产出完整 tool_call |
+| `tool_call_streaming` | 工具调用参数流式增量 | `ToolInputDelta` 事件到达时产出；当前来自 Chat Completions 流式接口（`LLMHandler`） |
 | `tool_result` | 工具执行结果 | 工具执行完成 |
-| `tool_cancel_requested` | 工具取消请求 | 已定义，当前运行时不产出 |
-| `tool_cancelled` | 工具已取消 | 已定义，当前运行时不产出 |
-| `tool_timed_out` | 工具执行超时 | 已定义，当前没有统一产出 |
 | `usage_update` | Token 用量更新 | LLM 返回 usage 信息时 |
 | `retry` | LLM 重试 | 遇到可重试错误时 |
 | `error` | Agent 错误 | LLM 调用失败（不可重试/重试耗尽） |
@@ -44,7 +41,7 @@ LLM 流式输出的**增量文本片段**。
 |-----------|------|------|
 | `content` | string | 本轮增量文本 |
 
-**产生**：`ReActRunner._step()` 中 `for item in self.llm.stream()` 的 `StreamDelta.content` 分支。
+**产生**：`ReActRunner._stream_turn()` 中 `async for event in self.llm.stream()` 的 `TextDelta` 分支。
 
 ### message_complete
 
@@ -59,7 +56,7 @@ LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
 }
 ```
 
-**产生**：流式收束时（收到 `LLMResponse`）或工具调用前。
+**产生**：流式收束时（收到 `StepFinish`）或工具调用前。**仅在 LLM 有文本输出时产出**（`full_text` 非空）；纯工具调用轮次（无文本）不会产出此事件。
 
 ### reasoning
 
@@ -74,7 +71,7 @@ LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
 }
 ```
 
-**产生**：`StreamDelta.reasoning` 分支。
+**产生**：`ReasoningDelta` 事件。
 
 ### reasoning_complete
 
@@ -89,7 +86,7 @@ LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
 }
 ```
 
-**产生**：流式收束或工具调用前，将累积的 reasoning 一次性发出。
+**产生**：流式收束或工具调用前，将累积的 reasoning 一次性发出。**仅在有思考内容时产出**（`full_reasoning` 非空）；无 reasoning 的轮次不会产出此事件。
 
 ### tool_call
 
@@ -114,7 +111,7 @@ LLM 返回一个**完整的工具调用**。
 | `name` | string | 工具名称 |
 | `arguments` | object | 完整工具参数 |
 
-**产生**：`ToolHandler.execute()` 入口处，每个解析成功的工具调用发一条。
+**产生**：`ReActRunner._stream_turn()` 阶段 5，每个工具调用发一条。工具参数 JSON 解析失败时也会产出此事件，`arguments` 为空对象 `{}`；同时产出 `tool_result(status="failed")`。如果流结束时某个工具调用缺少有效 `id` 或 `name`，底层 accumulator 会跳过该调用，因而不会产生对应的 `tool_call` / `tool_result` 事件。
 
 ### tool_call_streaming
 
@@ -126,7 +123,6 @@ LLM **逐步输出**工具调用参数时的流式增量。
   "data": {
     "tool_calls": [
       {
-        "index": 0,
         "id": "call_abc123",
         "name": "bash",
         "arguments_delta": "{\"com"
@@ -138,14 +134,14 @@ LLM **逐步输出**工具调用参数时的流式增量。
 
 | tool_calls[] 字段 | 类型 | 说明 |
 |-------------------|------|------|
-| `index` | int | 工具调用序号 |
-| `id` | string | 工具调用 ID（可选；首个 chunk 设定后后续 chunk 缺省） |
-| `name` | string | 工具名称（可选；同 id，仅首个 chunk 含此字段） |
-| `arguments_delta` | string | 参数字符串增量（可选；首个 chunk 可能尚未产出参数） |
+| `index` | int | 工具调用序号（可选；当前 `react_runner` 构造事件时未包含此字段，前端不应依赖） |
+| `id` | string | 工具调用 ID。当前 `react_runner` 会把 `ToolInputDelta.id` 原样放入事件；字段通常会出现，但值可能是空字符串，消费端不应依赖首个参数增量已有有效 ID |
+| `name` | string | 工具名称。同 `id`，字段通常会出现，但值可能是空字符串，消费端应容忍无有效名称的早期增量 |
+| `arguments_delta` | string | 参数字符串增量（可选字段；当前 `react_runner` 只在有参数片段时才通过 `ToolInputDelta` 产出事件，因此实际每个 chunk 都含此字段） |
 
-> `id` / `name` / `arguments_delta` 为 `None` 时整个字段从 JSON 中省略（不输出 `"name": null`），因此消费端应以字段是否存在来判断，而非检查值是否为 `null`。
+> `id` / `name` / `arguments_delta` 为 `None` 时整个字段从 JSON 中省略（不输出 `"name": null`），因此消费端应以字段是否存在来判断，而非检查值是否为 `null`。`index` 同理，当前实现未包含此字段，消费端不应假设它存在。当前 `react_runner` 会把 `ToolInputDelta.id/name` 原样放入事件；这两个字段通常会出现，但值可能是空字符串 `""`（取决于上游 delta 是否已经给出 id/name），消费端不应假设首个参数增量一定有有效 id/name。
 
-**产生**：`StreamDelta.tool_calls` 分支。当前 `CompletionAdapter` 会在流式 `delta.tool_calls` 到达时产生；`ResponsesAdapter` 当前在 `response.completed` 后组装完整工具调用，不产生此流式增量。
+**产生**：LLM 流式输出的 `ToolInputDelta` 事件。当前 `LLMHandler`（Chat Completions 适配器）会在流式 `delta.tool_calls` 到达时产生；`react_runner` 收到 `ToolInputDelta` 后构造 `tool_call_streaming_event` 时仅传递 `id`、`name`、`arguments_delta`，不传递 `index`。
 
 ### tool_result
 
@@ -171,15 +167,15 @@ LLM **逐步输出**工具调用参数时的流式增量。
 | `name` | string | 工具名称 |
 | `result` | string | 执行结果 |
 | `error` | string \| null | null 表示成功 |
-| `status` | string | 当前运行时实际会出现 `"completed"` / `"failed"` / `"cancelled"`；事件定义里还预留了 `"timed_out"` |
-| `error_code` | string \| null | 错误码（当前 `ToolHandler` 调用时未传入，通常为 `null`） |
-| `metadata` | object | 预留的工具附加元数据字段；当前 `ToolHandler` 不会把中间件 after 钩子补充的 metadata 传给 `tool_result_event()`，因此通常不存在 |
+| `status` | string | 当前运行时实际会出现 `"completed"` / `"failed"` / `"cancelled"`；`"timed_out"` 当前未在 `ToolResult` 或 `tool_result_event()` 中实现。**注意**：前端当前用 `!!d.error` 判断 ok/error，不读取 `d.status`；取消/中断路径下可能出现 `status="cancelled"` 且 `error=null`，前端会将其映射为 `"ok"`，因此客户端若需要区分取消状态应优先读取 `status` |
+| `error_code` | string \| null | 错误码（`react_runner` 调用 `tool_result_event()` 时未传入此参数，默认为 `null`） |
+| `metadata` | object | 预留的工具附加元数据字段；`react_runner` 当前调用 `tool_result_event()` 时未将 `ToolResult.metadata` 传入，因此即使中间件 after 钩子补充了 metadata 也不会出现在事件中，此字段通常不存在 |
 
 ### tool_cancel_requested / tool_cancelled / tool_timed_out
 
-这些事件类型在 `ftre-agent-core` 中已有事件构造函数，`AgentLoop.PERSISTENT_EVENTS` 也保留了这些类型，但当前主运行路径不产出它们：
+这些事件类型在 `AgentLoop.PERSISTENT_EVENTS` 中被列出（以便未来实现时能自动持久化），但不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应的事件构造函数，当前主运行路径不产出它们：
 
-- 工具取消通过 `tool_result(status="cancelled")` 加最终 `done(success=false, reason="cancelled")` 表达。
+- 取消最终通过 `done(success=false, reason="cancelled")` 表达；如果工具任务被取消/中断，可能额外产出 `tool_result(status="cancelled")`，但不应依赖每次取消都有 cancelled 状态的 `tool_result`。
 - 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。
 
 因此客户端不应依赖这些事件作为取消/超时的实时信号。
@@ -201,7 +197,7 @@ LLM 返回的 **Token 用量**。
 }
 ```
 
-**产生**：`LLMResponse.usage` 或 `StreamDelta.usage` 不为空时。对无工具调用的流式完成，底层适配器通常在流结束后产出一次 `StreamDelta(usage=...)`，因此 `usage_update` 可能出现在 `message_complete` 之前。
+**产生**：`StepFinish.usage` 不为空时。底层适配器在 OpenAI 流结束后会先 finalize 出完整 `ToolCall*` 内部事件，再产出 `StepFinish`；`react_runner` 收到 `ToolCall` 时会先记录并启动工具任务，收到随后的 `StepFinish` 后如果 `usage` 不为空则发出 `usage_update`。由于 `StepFinish` 仍在 `_stream_turn()` 的流循环内处理，而 `message_complete` 在流循环结束后才产出，因此对外 `usage_update` 始终出现在 `message_complete` 之前。
 
 ### retry
 
@@ -224,7 +220,7 @@ LLM 调用遇到**可重试错误**（网络/超时/限流等），准备重试�
 | `code` | string | 错误码 |
 | `message` | string | 错误描述 |
 | `attempt` | int | 当前重试次数（从 1 开始） |
-| `max_attempts` | int | 最大重试次数 |
+| `max_attempts` | int | 最大重试次数（不含首次尝试） |
 
 ### error
 
@@ -261,7 +257,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 
 ### done
 
-**执行结束**。不论成功/失败/取消/超迭代，最后必定有一条。
+**执行结束**。对已经进入 `ReActAgent.run()` / `ReActRunner` 的一次运行，正常完成、失败、取消或超迭代时都会产出此事件；`AgentLoop` 在入参为空、session 不存在、channel 不匹配、同 session 并发丢弃等早退路径不会发布 `done`。
 
 ```json
 {
@@ -276,8 +272,8 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
 | `success` | bool | 是否成功 |
-| `reason` | string | `"completed"` / `"max_iterations"` / `"error"` / `"cancelled"` / `"command"`（`"command"` 不在 `DoneReason` 枚举中，由 `AgentLoop` 直接构造） |
-| `usage` | object | 总 Token 用量（可选） |
+| `reason` | string | `"completed"` / `"max_iterations"` / `"error"` / `"cancelled"` |
+| `usage` | object | 总 Token 用量（可选；当前运行时不填充此字段，token 用量通过 `usage_update` 事件获取） |
 
 ---
 
@@ -288,22 +284,21 @@ _user_input 到达 AgentLoop_
   │
   ├─ _loop() 开始
   │   │
-  │   ├─ _step() 第 1 轮（有工具调用）
+  │   ├─ _stream_turn() 第 1 轮（有工具调用）
   │   │   ├─ LLM stream
-  │   │   │   ├─ reasoning             (chunk 1)
-  │   │   │   ├─ reasoning             (chunk 2)
+  │   │   │   ├─ reasoning             (chunk 1，如有)
+  │   │   │   ├─ message               (chunk，如有文本输出)
   │   │   │   └─ tool_call_streaming   (arg chunks)
-  │   │   ├─ usage_update              (LLMResponse.usage，如有)
-  │   │   ├─ reasoning_complete
-  │   │   ├─ message_complete          (如有文本)
-  │   │   ├─ tool_call                 (每个 tool)
-  │   │   └─ tool_result               (每个 tool)
+  │   │   ├─ usage_update              (StepFinish.usage，如有)
+  │   │   ├─ reasoning_complete          (如有思考内容)
+  │   │   ├─ message_complete            (如有文本)
+  │   │   ├─ tool_call → tool_result   (交替，每个 tool 一对)
   │   │
-  │   ├─ _step() 第 2 轮（直接回复）
+  │   ├─ _stream_turn() 第 2 轮（直接回复）
   │   │   ├─ LLM stream
   │   │   │   ├─ message               (chunk 1)
   │   │   │   └─ message               (chunk 2)
-  │   │   ├─ usage_update              (StreamDelta.usage，如有)
+  │   │   ├─ usage_update              (StepFinish.usage，如有)
   │   │   ├─ message_complete
   │   │   └─ done (success=true, reason="completed")
   │   │
@@ -317,10 +312,9 @@ _user_input 到达 AgentLoop_
 | 路径 | done.reason | done.success | 触发条件 |
 |------|------------|:---:|------|
 | 正常完成 | `"completed"` | true | 模型不再调用工具，直接输出最终回答 |
-| 指令完成 | `"command"` | true | 斜杠指令处理完成（如 `/help` 输出帮助文本）；该值不在 `DoneReason` 枚举中，由 `AgentLoop` 直接产出 |
 | 超出迭代 | `"max_iterations"` | false | 达到 `max_iterations` 上限 |
 | 错误 | `"error"` | false | LLM 调用失败且不可重试/重试耗尽 |
-| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 指令 |
+| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 指令，或上行 `cancel` 帧 / 其它路径触发 `agent.cancel_nowait()` |
 
 ---
 
@@ -328,35 +322,41 @@ _user_input 到达 AgentLoop_
 
 这些结构只存在于 Agent 内部，不直接作为事件发出，但影响最终事件的生成。
 
-### StreamDelta
+### LLM 流式事件类型（概念模型）
 
-LLM 流式输出的单次增量。
+以下类型是 `ftre-agent-core` 的 `LLMHandler` 在流式输出过程中产出的内部事件，不直接作为 Agent 事件发出，但影响最终事件的生成：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `content` | string \| null | 文本增量 → 产出一条 `message` 事件 |
-| `reasoning` | string \| null | thinking 内容增量 → 产出一条 `reasoning` 事件 |
-| `tool_calls` | ToolCallDeltaChunk[] \| null | 工具调用增量 → 产出一条 `tool_call_streaming` 事件；当前主要来自 Chat Completions 流式 delta |
-| `usage` | dict \| null | usage → 产出一条 `usage_update` 事件 |
+| 实际类型 | 字段 | 对应产出事件 |
+|---------|------|-------------|
+| `TextDelta` | `text: str` | → 产出一条 `message` 事件 |
+| `ReasoningDelta` | `text: str` | → 产出一条 `reasoning` 事件 |
+| `ToolInputDelta` | `id`, `name`, `text` | → 产出一条 `tool_call_streaming` 事件 |
+| `ToolCall` | `id`, `name`, `input` | → 内部先记录并启动工具任务；对外事件在流循环结束、完整文本事件之后产出 |
+| `StepFinish` | `finish_reason`, `usage` | → 产出一条 `usage_update` 事件（usage 不为空时） |
 
-同一个 StreamDelta 可同时包含多个字段。
+每个事件是独立对象，不存在"同一对象同时包含多个字段"的情况。当前 Chat Completions 适配器在 provider 流结束后产出的内部顺序是：先 `ToolCall*`，再 `StepFinish`。因此工具任务可能已经在对外 `usage_update` / `message_complete` 之前启动，但 `tool_call` / `tool_result` 这两个 Agent 事件仍会等到完整文本事件之后再统一产出。
 
-### LLMResponse
+### 流式收束后的产出顺序
 
-一次完整流式响应收束后的结果。
+`_stream_turn()` 的产出分两个阶段：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `content` | string \| null | 完整文本（如有）|
-| `reasoning` | string \| null | 完整 reasoning（thinking 模型）|
-| `tool_calls` | ToolCallWrapper[] | 完整工具调用列表；Chat Completions 在累计到工具调用时产出，Responses 适配器在 `response.completed` 后组装产出 |
-| `usage` | dict \| null | 本次响应的 Token 用量 |
-
-收到后按顺序产出：usage_update → reasoning_complete → message_complete → tool_call → tool_result。
+1. **流循环内（Phase 1）**：收到 `StepFinish` 时，若 `usage` 不为空则产出 `usage_update`（在流循环内处理，始终出现在 `message_complete` 之前）
+2. **流循环结束后（Phase 2）**：按顺序产出 `reasoning_complete`（仅在有思考内容时）→ `message_complete`（仅在有文本时）→ `tool_call` 与 `tool_result` 交替产出（每个工具先 call 再 result）
 
 ### 工具参数解析失败
 
-当 LLM 返回的 tool_call.function.arguments JSON 解析失败时，**不产出 tool_call 事件**，直接产出 tool_result。`name` 保留模型返回的原始 `tool_call.function.name`，不是固定值：
+当 LLM 返回的 `tool_call.function.arguments` JSON 解析失败，但该工具调用仍有有效 `id` 和 `name` 时，仍然会产出 `tool_call` 事件（`arguments` 为空对象 `{}`），同时产出 `tool_result(status="failed")`。`name` 保留模型返回的原始 `tool_call.function.name`。如果缺少有效 `id` 或 `name`，该工具调用会在 accumulator finalize 阶段被跳过，不会进入后续工具执行阶段。
+
+```json
+{
+  "type": "tool_call",
+  "data": {
+    "id": "call_abc123",
+    "name": "bash",
+    "arguments": {}
+  }
+}
+```
 
 ```json
 {
@@ -364,8 +364,8 @@ LLM 流式输出的单次增量。
   "data": {
     "id": "call_abc123",
     "name": "bash",
-    "result": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
-    "error": "[PARSE_ERROR] Tool call JSON truncated or malformed. Please retry.",
+    "result": "[PARSE_ERROR] Tool call arguments were malformed JSON.",
+    "error": "malformed JSON arguments",
     "status": "failed",
     "error_code": null
   }

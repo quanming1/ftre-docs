@@ -23,6 +23,7 @@ export const docs: DocEntry[] = [
   { path: 'ws-protocol', title: 'WebSocket 协议', category: '协议' },
   { path: 'bus-message', title: 'Bus 消息协议', category: '协议' },
   { path: 'agent-events', title: 'Agent 事件协议', category: '协议' },
+  { path: 'context-management', title: '上下文管理机制', category: '协议' },
 
   // 指令
   { path: 'commands', title: '指令系统', category: '指令' },

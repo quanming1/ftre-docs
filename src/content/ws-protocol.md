@@ -8,7 +8,7 @@
 
 ## 连接模型
 
-一条物理 WebSocket 可以关注多个 session（多 tab / 多会话同步），通过 `attach`/`detach` 帧声明。`user_input` 帧会**隐式 attach**当前 session，保持向后兼容。
+一条物理 WebSocket 可以关注多个 session（多 tab / 多会话同步），通过 `attach`/`detach` 帧声明。`user_input` / `cancel` 帧会**隐式 attach**当前 session，保持向后兼容。
 
 后端维护两个索引：
 
@@ -34,10 +34,10 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 是 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端 BusMessage 默认用 uuid4 hex 前 16 位 |
+| `id` | string | 建议 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端当前不强制校验。缺失时帧仍会被处理；仅 `user_input` / `cancel` 等进入 Bus 的帧会写入 `metadata.frame_id`，`attach` / `detach` 不回显该字段，因此无法用于服务端确认；后端 BusMessage 默认用 uuid4 hex 前 16 位 |
 | `type` | string | 是 | 帧类型，决定路由行为 |
-| `data` | object | 是 | 载荷，结构因 type 而异 |
-| `metadata` | object | 否 | 附加元数据，透传给 Agent |
+| `data` | object | 否 | 载荷，结构因 type 而异；后端对缺失 data 有容错（默认 `{}`） |
+| `metadata` | object | 否 | 附加元数据，进入后端 `BusMessage.metadata`；当前不参与 LLM 配置或消息构建，主要用于透传 `frame_id` 等控制信息 |
 
 ---
 
@@ -103,11 +103,11 @@
 
 | data 字段 | 类型 | 必填 | 说明 |
 |-----------|------|:---:|------|
-| `content` | string \| array | 是 | 消息内容（见下方 content 协议）。v2 格式中 `skill` 作为 part 嵌入数组 |
+| `content` | string \| array | 否 | 消息内容（见下方 content 协议）。v2 格式中 `skill` 作为 part 嵌入数组；协议上通常不应与 `attachments` 同时为空。当前后端未在 WS 入口显式拒绝二者同时为空，`AgentLoop._run_async()` 会静默忽略这种输入 |
 | `session_id` | string | 是 | 目标 session ID |
-| `attachments` | array | 否 | 图片附件列表 |
+| `attachments` | array | 否 | 图片附件列表；允许只发送附件不带文本 |
 
-**metadata 字段**（前端自由填充，透传到 Agent，常用）：
+**metadata 字段**（前端自由填充；当前仅作为 BusMessage metadata 保存/部分下行透传，不参与 LLM 配置或消息构建）：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -131,14 +131,14 @@
 - 前端收到 echo，检查 `messages` 中是否已有同 id → 有则跳过，避免重复渲染
 
 **并发防御**：
-- `AgentLoop._run()` 中通过 `is_session_running()` 检查；同一 session 已有 Agent 运行时静默丢弃新 `user_input`
+- `AgentLoop._run_async()` 中通过 `is_session_running()` 检查；同一 session 已有 Agent 运行时静默丢弃新 `user_input`
 - 前端 `isBusy` 状态阻止重复发送
 
 ### 4. cancel — 取消生成
 
-取消当前通过 `/cancel` 指令实现：前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)）。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。`/cancel` 是 ephemeral 指令，不持久化用户输入、不 echo，只调用 `agent.cancel_nowait()`；被取消的 Agent 自身产出 `done(success=false, reason="cancelled")` 作为最终信号。
+取消当前通过 `/cancel` 指令实现：前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)）。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。`/cancel` 的 handler 将 `ctx.meta["inbound"]` 替换为 `type="cancel"` 的 BusMessage，Pipeline 继续走到 `_step_run` 的 cancel 分支，调用 `agent.cancel_nowait()`；被取消的 Agent 自身产出 `done(success=false, reason="cancelled")` 作为最终信号。
 
-> `type: "cancel"` 帧（`data: { session_id }`）在 Bus 层仍被 `AgentLoop._step_run()` 处理，但当前 `ws_channel` 不直接路由该帧类型。`websocket-client.ts` 里保留了 `sendCancel()` 历史方法，但当前 chat store 不再调用它；若未来需要取消帧，可通过其他 Channel 或扩展 ws_channel 实现。
+> `type: "cancel"` 帧（`data: { session_id }`）在 Bus 层仍被 `AgentLoop._step_run()` 处理，`ws_channel._on_message` 会将其隐式 attach 并通过 `Channel.receive(kind="cancel")` 投递到 Bus。`websocket-client.ts` 保留了 `sendCancel()` 方法，当前 chat store 不再主动调用它（暂停按钮改用发送 `/cancel` 文本帧）；如果要恢复独立取消帧入口，可直接复用现有 `sendCancel()` 能力。
 
 ---
 
@@ -266,14 +266,14 @@
     "type": "tool_call_streaming",
     "data": {
       "tool_calls": [
-        { "index": 0, "id": "call_abc123", "name": "bash", "arguments_delta": "{\"com" }
+        { "id": "call_abc123", "name": "bash", "arguments_delta": "{\"command\"" }
       ]
     }
   }
 }
 ```
 
-**前端处理**：与 `tool_call` 逻辑相同，但 `arguments` 是增量拼接（`arguments_delta`）而非一次性完整。
+**前端处理**：与 `tool_call` 逻辑相同，但 `arguments` 是增量拼接（`arguments_delta`）而非一次性完整。当前 `react_runner` 构造的下行 chunk 只包含 `id` / `name` / `arguments_delta`，不包含 `index`；前端也不依赖 `index`。当前 `chat.ts` 会跳过没有有效 `id` 的增量（`if (!c.id) continue`），因此后端/上游早期发出的空 id 参数片段可能不会被前端展示；消费端不应假设每个增量都一定能归并到可见工具卡片。
 
 #### tool_result — 工具执行结果
 
@@ -301,24 +301,18 @@
 | `result` | string | 执行结果 |
 | `error` | string \| null | 非 null 表示执行失败 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
-| `error_code` | string \| null | 错误码；当前 `ToolHandler` 调用时未传入，通常为 `null` |
-| `metadata` | object | 预留的工具附加元数据字段；当前 `ToolHandler` 不会把中间件 after 钩子补充的 metadata 传给 `tool_result_event()`，因此通常不存在 |
+| `error_code` | string \| null | 错误码（`react_runner` 调用 `tool_result_event()` 时未传入此参数，默认为 `null`） |
+| `metadata` | object | 预留的工具附加元数据字段；`react_runner` 当前调用 `tool_result_event()` 时未将 `ToolResult.metadata` 传入，因此即使中间件 after 钩子补充了 metadata 也不会出现在事件中，此字段通常不存在 |
 
 **前端处理**：
-- 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`）
+- 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`），同时更新 `name`（`d.name || tc.name`，优先使用事件中的 name）
+- **注意**：前端当前用 `!!d.error` 判断 `"ok"` / `"error"`，不读取 `d.status` 字段。后端在取消路径（`status="cancelled"` + `error=null`）和部分中断路径（`status="failed"` + `error=null`）下，前端会将 `status` 错误映射为 `"ok"`
 
 #### tool_cancel_requested / tool_cancelled / tool_timed_out
 
-这些类型属于预留/可持久化事件（在 `PERSISTENT_EVENTS` 中），但当前 `ToolHandler` 取消路径主要下发 `tool_result(status="cancelled")`，前端 `applyEvent` 对这三类无 case 分支。当前也没有统一的 `tool_timed_out` 实时事件。
+这些类型属于预留/可持久化事件（在 `AgentLoop.PERSISTENT_EVENTS` 中），但它们不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应构造函数，当前主运行路径不会产出这些事件。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这三类无 case 分支。当前也没有统一的 `tool_timed_out` 实时事件。以下字段为预留定义，当前未被实际使用：
 
-| data.data 字段 | 类型 | 说明 |
-|----------------|------|------|
-| `id` | string | 关联的 tool_call ID |
-| `name` | string | 工具名称 |
-| `reason` | string | 取消/超时原因（如 `"user_cancelled"`, `"timed_out"`） |
-| `status` | string | 状态：`"cancelling"` / `"cancelled"` / `"timed_out"` |
-| `error_code` | string \| null | 错误码 |
-| `result_status` | string \| null | 最终结果状态（如 `"cancelled"`, `"timed_out"`） |
+当前源码没有这些事件的数据结构定义或构造函数，因此也没有可依赖的字段 schema；取消/中断通常通过 `done(success=false, reason="cancelled")`，以及可能出现的 `tool_result(status="cancelled")` 表达。
 
 #### reasoning — LLM 思考文本片段
 
@@ -391,10 +385,10 @@
 **前端处理**：
 - 关闭当前 streaming assistant 的 `streaming` 状态
 - push 一条 `isError = true` 的消息
-- 设置 `error`
+- 设置 `error`（格式：`code ? `[\${code}] \${message}` : message`）
 - `isBusy` 的实际切换由紧随其后的 `session_status(idle)` 全局事件负责
 
-常见错误码：`network`, `timeout`, `internal_server_error`, `content_filter`, `auth_error`
+常见错误码：`network`, `timeout`, `rate_limit`, `internal_server_error`, `content_filter`, `auth_error`, `bad_request`, `api_error`, `unknown`
 
 #### retry — Agent 重试
 
@@ -412,6 +406,13 @@
   }
 }
 ```
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `code` | string | 触发重试的错误码（与 error 事件的 code 同源，如 `"network"`、`"timeout"`、`"rate_limit"`） |
+| `message` | string | 错误描述 |
+| `attempt` | number | 当前是第几次重试（从 1 开始） |
+| `max_attempts` | number | 最大重试次数（不含首次调用；等于 `agent.max_retries`） |
 
 **前端处理**：
 - 清理 streaming assistant 尾部未封口的 part 片段
@@ -445,11 +446,11 @@
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `success` | bool | 是否成功 |
-| `reason` | string | `"completed"`（正常完成）/ `"command"`（指令完成）/ `"max_iterations"` / `"error"` / `"cancelled"` |
-| `usage` | object | 总 Token 用量（可选） |
+| `reason` | string | `"completed"`（正常完成）/ `"max_iterations"` / `"error"` / `"cancelled"` |
+| `usage` | object | 总 Token 用量（可选；当前运行时不填充此字段，前端不消费 done 事件的 usage，由 `usage_update` 事件单独推送） |
 
 **前端处理**：
-- `sealStreamingPart()` 封口所有流式 parts
+- `sealStreamingPart()` 封口末尾仍在 streaming 的 text/reasoning part；`message_complete` / `reasoning_complete` 负责按类型查找并封口对应流式段
 - 设置 `streaming = false`
 - 当前前端会将仍处于 running/pending 的 toolCalls 标记为 `"ok"`
 - 清空 `retryState`
@@ -457,24 +458,23 @@
 
 #### context_compact_start / context_compact_done / context_compact_failed
 
-上下文压缩实时事件，插入/更新 `compact` 状态消息到消息列表。自动压缩路径由 `before_messages_build` hook 在 Agent 正式运行前触发；手动 `/compact` 路径由指令 handler 触发。
+上下文压缩实时事件，插入/更新 `compact` 状态消息到消息列表。自动压缩路径由 Pipeline `_step_compact` 阶段（`CompactHandler.should_compact()` 判断水位 → 标记 `need_compact`）标记后，`_step_run` fire-and-forget 派发到线程中，`_run_async()` 在 Agent 正式执行前调用 `CompactHandler.compact()`；手动 `/compact` 路径由 `_step_command` 中指令 handler（`_cmd_compact`）触发，同样走到 `CompactHandler.compact()`。两条路径共用同一个 `compact()` 方法。
 
 **context_compact_start** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `ratio` | number \| undefined | 当前 token 水位比例（如 `0.83`） |
-| `threshold` | number \| undefined | 触发阈值（如 `0.8`） |
-| `tokens` | number \| undefined | 压缩前的 token 数（自动压缩路径） |
-| `events` | number \| undefined | 压缩前事件数（手动 `/compact` 路径） |
+| `events` | number | 压缩前事件数 |
+| `tokens` | number | 压缩前的 token 数（`_get_total_tokens` 返回值，无数据时为 0） |
+| `threshold` | number | 触发阈值（如 `0.8`） |
 
 **context_compact_done** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `tokens_before` | number \| undefined | 压缩前的 token 数（可选） |
-| `events_before` | number \| undefined | 压缩前事件数（可选） |
-| `summary` | string \| undefined | 压缩后的摘要预览（可选） |
+| `tokens_before` | number \| undefined | 压缩前的 token 数（`_get_total_tokens` 有值时写入） |
+| `events_before` | number | 压缩前事件数 |
+| `summary` | string | 压缩后的摘要 |
 
 **context_compact_failed** data：
 
@@ -483,11 +483,11 @@
 | `reason` | string | 失败原因描述 |
 
 **前端处理**：
-- `context_compact_start`：push 一条 `compact.status = "running"` 的 system 消息
-- `context_compact_done`：找最后一条 `running` 的 compact 消息，更新为 `status = "done"`，写入 `tokensBefore` 和 `summaryPreview`
+- `context_compact_start`：push 一条 `compact.status = "running"` 的 system 消息，同时写入 `tokensBefore`（来自 `data.tokens`，若存在）
+- `context_compact_done`：找最后一条 `running` 的 compact 消息，更新为 `status = "done"`，写入 `tokensBefore`（优先取 `data.tokens_before`，回退到 start 时写入的值）和 `summary`
 - `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
 
-**注意**：这三类实时事件由本地插件（如 `context_compact.py`）通过 Bus 发送，当前不在后端 `AgentLoop.PERSISTENT_EVENTS` 白名单内，默认不会由 AgentLoop 持久化。
+**注意**：这三类实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop.PERSISTENT_EVENTS` 白名单内，默认不会由 AgentLoop 持久化。桌面端 `ChatHeader` 的归档/压缩菜单当前调用 `POST /api/sessions/{id}/compact`，但后端尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 
 #### context_compact — 历史回放专用
 
@@ -496,16 +496,18 @@
   "type": "agent_event",
   "data": {
     "type": "context_compact",
-    "data": { "summary": "..." }
+    "data": { "summary": "...", "events_before": 42 }
   }
 }
 ```
 
-**仅出现在历史回放（HTTP API 历史消息流）中**，对应后端 `context_compact.py` 插件写入 DB 的持久化事件。前端 `applyEvent` 的 `case "context_compact"` 分支处理：插入一条已完成（`status = "done"`）的 compact 分隔气泡。与实时的三段式事件（`_start / _done / _failed`）不同，此事件是单步持久化形态。
+**仅出现在历史回放（HTTP API 历史消息流）中**，对应后端 `CompactHandler` 写入 DB 的持久化事件。前端 `applyEvent` 的 `case "context_compact"` 分支处理：插入一条已完成（`status = "done"`）的 compact 分隔气泡。与实时的三段式事件（`_start / _done / _failed`）不同，此事件是单步持久化形态。
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `summary` | string | 压缩摘要内容 |
+| `tokens_before` | number \| undefined | 压缩前 token 数（`_get_total_tokens` 有值时写入） |
+| `events_before` | number | 压缩前事件数 |
 
 #### external_message — 跨 session 消息注入
 
@@ -516,16 +518,18 @@
     "type": "external_message",
     "data": {
       "content": "来自其他 session 的消息",
-      "from_channel": "subagent",
-      "from_session": "subagent::sess_xxx"
+      "from_channel": "ws",
+      "from_session": "ws::sess_xxx"
     }
   }
 }
 ```
 
 **前端处理**：
-- 插入一条 `external = true` 的 assistant 消息
+- 插入一条 `external = true` 的 assistant 消息，附带 `externalFrom = "${from_channel}::${from_session}"` 标识来源，以及 `parts` 渲染文本段
 - 如果当前有 streaming tail，插入到 tail 之前（避免视觉错位）
+
+**来源**：仅 `send_message(kind="notify")` 会产生并持久化 `external_message`。`send_message(kind="invoke")` 不产生该事件，而是向目标 session 投递普通 `user_input`；来源信息会写入 `content` 前缀，并按普通 `user_input` echo 渲染。
 
 ---
 
@@ -535,7 +539,7 @@
 
 后端分发不走 per-session 的 `attach` 索引，而是扇出给所有活跃连接，因此**无需 attach 也能收到**。详见 [Bus 消息协议 — 全局广播消息](/docs/bus-message)。
 
-**前端分流**：在 WebSocket 入口按顶层 `type` 分流。`agent_event` 进 `applyEvent`（按 session 路由到消息流），`global_event` 不进消息流；当前 `chat.ts` 已消费 `session_status`，收到后会更新对应 chat bucket 的 busy 状态，并触发会话列表 store 重新拉取 `GET /api/sessions`，从而刷新列表中的运行态。
+**前端分流**：在 WebSocket 入口按顶层 `type` 分流。`agent_event` 进 `applyEvent`（按 session 路由到消息流），`global_event` 不进消息流；当前 `chat.ts` 已消费 `session_status`，收到后会更新对应 chat bucket 的 busy 状态，并触发 `useSession.loadAllSessions()` 刷新会话列表（该流程会先拉取 `/api/workspaces`，再按工作区分页拉取 `/api/sessions`）。注意 HTTP 刷新得到的 `running` 字段仅覆盖普通 ReActAgent 执行态，不覆盖 `/compact` 等命令态。
 
 ### session_status — session 运行态变化
 
@@ -559,17 +563,18 @@
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `session_id` | string | 状态变化的 session ID（在 data 内，因为帧本身不绑定单一 session） |
-| `status` | string | `"running"`（Agent 或指令开始执行）/ `"idle"`（执行结束） |
+| `status` | string | `"running"`（Agent 或命令开始执行）/ `"idle"`（执行结束） |
 
 **何时发出**：
-- `running`：`user_input` 被 `AgentLoop` 受理时（Agent 执行路径在 `user_input` echo 之前；普通指令路径在命令产出结果时）
-- `idle`：Agent / 指令执行结束时（在 `done` 之后，正常 / 错误 / 取消 / 超迭代都会发）
+- 普通 Agent 执行路径的 `running`：在 `_active_agents[sid] = agent` 之后、`user_input` echo 之前（实际在 `_run_async()` 中）
+- 普通 Agent 执行路径的 `idle`：Agent 执行结束时在 `finally` 中 `pop` 之后发出（正常 / 错误 / 取消 / 超迭代都会发）
+- `/compact` 指令路径：不进入 `_run_async()`，由 `_cmd_compact()` 内部手动发送 `running` / `idle`，用于驱动前端 loading 状态
 
 **前端处理**：
 - 不入消息流、不持久化，是瞬时控制信号
-- `chat.ts` 收到 `session_status` 后更新对应 session bucket 的 `isBusy`；`running` 还会清空上一轮 `error` / `retryState`
-- 同时触发 `useSession.loadAllSessions()`，由 HTTP `GET /api/sessions` 重新获取会话列表运行态
-- 初始态同样通过 HTTP `GET /api/sessions` 获取
+- `chat.ts` 收到 `session_status` 后会直接更新对应 session bucket 的 `isBusy`；`running` 还会清空上一轮 `error` / `retryState`
+- 同时触发 `useSession.loadAllSessions()` 刷新会话列表；该流程会先请求 `GET /api/workspaces`，再按工作区分页请求 `GET /api/sessions`
+- 但后端 `GET /api/sessions` 返回的 `running` 字段仅由 `AgentLoop._active_agents` 判断，只覆盖普通 ReActAgent 执行态，不覆盖 `/compact` 等命令态。因此 `/compact` 的 busy 状态以实时 `session_status` 为准，不能依赖 HTTP 初始快照恢复
 
 **当前状态**：后端已完整实现 global_event 的生成与扇出；前端已消费 `session_status`，用于同步当前会话 busy 状态，并作为刷新会话列表的触发信号。
 
@@ -654,11 +659,11 @@
 ## Session ID 格式
 
 ```
-<channel_id>::<prefix>_<uuid>
+<channel_id>::<prefix>_<uuid4-hex-12>
 ```
 
 示例：
-- `ws::sess_89f19d375bbc` — WebSocket 来源的 session
+- `ws::sess_89f19d375bbc` — WebSocket 来源的 session（`89f19d375bbc` 为 uuid4 hex 前 12 位）
 - `cron::sess_xxx` — Cron 触发的 session
 - `subagent::sess_xxx` — 子任务 session
 
@@ -714,18 +719,18 @@
 前端渲染为 `external = true` 的消息。**后端 `to_openai_messages`** 在重建 LLM 历史时转换为：
 
 ```
-[来自 <channel>::<session> 的消息] <content>
+[来自 <from_channel>::<from_session> 的消息] <content>
 ```
 
-格式为 `role: "assistant", name: _safe_name(src)`。其中 `_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符（例 `ws::sess_xxx` → `ws__sess_xxx`）。
+格式为 `role: "assistant", name: _safe_name(src)`，其中 `src = f"{from_channel}::{from_session}"`。注意 `from_session` 本身通常已经是完整 session id（如 `ws::sess_xxx`），因此实际示例可能是 `[来自 ws::ws::sess_xxx 的消息] <content>`，对应 `name` 为 `ws__ws__sess_xxx`。`_safe_name` 会将非字母数字及 `_-` 以外的字符逐个替换为 `_`、去头尾 `_`、截断到 64 字符；空字符串兜底返回 `"external"`。
 
 ### attach / detach — 无确认响应
 
-这两个帧是 **fire-and-forget**。后端收到后直接 `return`，不返回任何确认帧。前端无需等待响应。
+这两个帧是 **fire-and-forget**。后端收到后直接 `return`，不返回任何确认帧。即使上行带了 `id`，该值也只对客户端本地有意义，后端不会回显；前端无需等待响应。
 
 ### context_compact — 上下文压缩
 
-`context_compact_start / done / failed` 事件由插件（`context_compact.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
+`context_compact_start / done / failed` 事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
 
 ### HTTP API 路由
 
@@ -736,23 +741,25 @@
 | GET | `/api/config` | 读取 `~/.ftre/config.json` |
 | PUT | `/api/config` | 覆盖写 `~/.ftre/config.json` |
 | GET | `/api/health` | 健康检查 |
-| POST | `/api/sessions` | 创建 session |
-| GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤） |
+| POST | `/api/sessions` | 创建 session（`channel_id` 必填 query param，`title`/`workspace` 可选 query param） |
+| GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤；返回 `{sessions, total, limit, offset}`，其中每个 session 附带 `running` 字段；该字段仅表示该 session 是否存在于 `AgentLoop._active_agents` 中，即是否有普通 ReActAgent 正在执行，不包含 `/compact` 等不创建 `_active_agents` 的命令态） |
 | PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
 | DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
-| GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；`USER_INPUT` 历史事件来自这里） |
+| GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；前端分页加载代码会拼 `limit`/`before_ts`/`after_ts` 到 URL 并读取 `has_more`/`total`，但后端不读取这些查询参数且只返回 `{"messages": [...]}`，因此首屏/分页请求都会被当作全量请求处理，前端因缺少 `has_more` 认为没有更早页；`USER_INPUT` 历史事件来自这里） |
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区（支持 `channel_id` 过滤；默认 `ws`） |
 | GET | `/api/skills` | 列出所有 Skill 元信息 |
 | GET | `/api/skills/:name` | 读取单个 Skill 完整信息 |
-| POST | `/api/skills` | 创建 Skill |
+| POST | `/api/skills` | 创建 Skill（返回 201） |
 | PUT | `/api/skills/:name` | 覆盖写 Skill 正文 |
-| DELETE | `/api/skills/:name` | 删除 Skill |
+| DELETE | `/api/skills/:name` | 删除 Skill（返回 204；目录形态会连同 references/scripts 一并删除） |
 | GET | `/api/cron` | 列出所有 Cron 任务 |
 | GET | `/api/cron/:job_id` | 获取单个 Cron 任务 |
-| POST | `/api/cron` | 创建 Cron 任务 |
-| PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务 |
-| DELETE | `/api/cron/:job_id` | 删除 Cron 任务 |
+| POST | `/api/cron` | 创建 Cron 任务（返回 201） |
+| PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务（仅允许修改 `cron` / `title` / `prompt` / `disabled`） |
+| DELETE | `/api/cron/:job_id` | 删除 Cron 任务（返回 204） |
 | GET | `/api/commands` | 返回已注册的斜杠指令列表 |
 
-`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数。
+> 桌面端 `triggerCompaction()` 当前会请求 `POST /api/sessions/:id/compact`，但后端 `routes.py` 尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+
+`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数，所有请求都会得到全量消息。

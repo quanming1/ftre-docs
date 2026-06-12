@@ -23,13 +23,13 @@ class BusMessage:
 | 字段 | 类型 | 谁填充 | 说明 |
 |------|------|-------|------|
 | `id` | string | 自动 | 16 位 hex UUID，创建时自动生成 |
-| `type` | string | Channel / AgentLoop | `"user_input"` / `"cancel"` / `"agent_event"` / `"global_event"` |
-| `from_channel` | string | Channel | 来源 Channel ID（`"ws"`, `"subagent"`, `"cron"` 等） |
-| `from_session` | string | Channel | 来源 Session ID |
+| `type` | string | Channel / AgentLoop / Tool | `"user_input"` / `"cancel"` / `"agent_event"` / `"global_event"` |
+| `from_channel` | string | Channel / AgentLoop / Tool | 来源 Channel ID（`"ws"`, `"subagent"`, `"cron"` 等） |
+| `from_session` | string | Channel / AgentLoop / Tool | 来源 Session ID |
 | `to_channel` | string | Channel / AgentLoop / Tool | 目标 Channel ID；普通 `Channel.receive()` inbound 通常等于 `from_channel`，跨通道投递或全局广播时可能不同；`"*"` 表示全局广播 |
 | `to_session` | string | Channel / AgentLoop / Tool | 目标 Session ID；普通 `Channel.receive()` inbound 通常等于 `from_session`，跨会话投递或全局广播时可能不同；`"*"` 表示全局广播 |
-| `data` | dict | Channel / AgentLoop | 原始 payload |
-| `metadata` | dict | Channel | 附加信息（如 `frame_id`） |
+| `data` | dict | Channel / AgentLoop / Tool | 原始 payload |
+| `metadata` | dict | Channel / AgentLoop | 附加信息（如 `frame_id`）。Channel 构造 inbound 时设置；AgentLoop echo 时透传 `inbound.metadata` |
 | `timestamp` | float | 自动 | `time.time()` |
 
 ## type 取值
@@ -37,8 +37,8 @@ class BusMessage:
 | type | 产生于 | 消费于 | data 内容 |
 |------|-------|-------|----------|
 | `"user_input"` | `Channel.receive()` | `AgentLoop._consume()` | 用户消息（content, session_id, attachments） |
-| `"cancel"` | `Channel.receive(kind="cancel")` | `AgentLoop._step_run()`（由 `_consume()` 驱动的 pipeline） | `{ session_id }` |
-| `"agent_event"` | `AgentLoop._run()` / `AgentLoop._run_command()` / 插件实时通知 / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}`；其中既包括 Agent 运行事件，也包括 `user_input` echo、普通指令输出、插件事件与 `external_message` |
+| `"cancel"` | `Channel.receive(kind="cancel")` 或 `/cancel` 指令 pipeline 转换（`_step_command` → `CommandManager`） | `AgentLoop._step_run()`（由 `_consume()` 驱动的 pipeline） | `{ session_id }` |
+| `"agent_event"` | `AgentLoop._run_async()` / `CompactHandler._notify()` / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}`；其中既包括 Agent 运行事件（含 `done` 失败事件 `{"type":"done","data":{"success":false,"reason":"error"}}`），也包括 `user_input` echo、`CompactHandler` 压缩事件与 `external_message` |
 | `"global_event"` | `AgentLoop` 等 | `ChannelManager._dispatch_loop()` | 全局广播事件 `{type: "<event-type>", data: {...}}`，`to_channel` / `to_session` 固定为 `"*"` |
 
 ### data 内容（按 type）
@@ -67,7 +67,7 @@ class BusMessage:
 }
 ```
 
-`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_input`，或 `send_message(kind="notify")` 产生的 `external_message`。
+`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_input`、`CompactHandler` 产生的 `context_compact_start / context_compact_done / context_compact_failed`，或 `send_message(kind="notify")` 产生的 `external_message`（data 内层含 `content`、`from_channel`、`from_session` 字段）。
 
 ## 来源
 
@@ -75,13 +75,13 @@ BusMessage 的主要构造入口：
 
 | 构造入口 | 场景 |
 |---------|------|
-| `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_input` / `cancel`；WebSocket 上行 `/cancel` 文本仍以 `user_input` 进入，AgentLoop 指令 pipeline 命中后按 `ephemeral` 指令处理：不入库、不 echo，只调用 handler 执行 `cancel_nowait()` |
-| `CronScheduler._tick()` | 构造 cron channel 的 `user_input` |
-| `AgentLoop._run()` | 构造 `agent_event`，包括 `user_input` echo 和 Agent 运行事件 |
-| `AgentLoop._run_command()` | 构造普通指令的 `user_input` echo、`message_complete`、`done(reason="command")`；也会调 `_publish_session_status()` 发 `session_status` |
+| `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_input` / `cancel`；WebSocket 上行 `/cancel` 文本以 `user_input` 进入，AgentLoop 指令 pipeline 命中后将 inbound 替换为 `type="cancel"` 消息，`_step_run` 在 cancel 分支调用 `cancel_nowait()` |
+| `CronScheduler._tick()` | 直接构造 BusMessage（`from_channel=self.default_channel`，默认 `"cron"`）并调用 `bus.publish_inbound()` 投递 `user_input`，不经过 `Channel.receive()` |
+| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_input` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`message_complete` / `reasoning_complete` / `tool_call` / `tool_result` / `usage_update` / `error` / `done` 等会按 `PERSISTENT_EVENTS` 白名单写入 DB（`message`、`reasoning`、`tool_call_streaming` 流式增量不持久化）。但 `_run_async()` 外层 `except Exception` 兜底构造的 `done(success=false, reason="error")` 当前只 publish outbound，不写入 DB。`_step_run` 通过 `run_in_executor` fire-and-forget 派发 `_run` 到线程，`_run` 内部通过 `asyncio.run()` 创建独立事件循环执行 `_run_async()` |
 | `AgentLoop._publish_session_status()` | 构造 `global_event(session_status)` |
+| `AgentLoop._cmd_compact._emit_status()` | `/compact` 指令内部构造 `global_event(session_status)`（running / idle），直接调用 `bus.publish_outbound()`（因 dispatch 运行在主事件循环协程中，不能使用 `run_coroutine_threadsafe`） |
 | `send_message._do_notify()` | 构造 `agent_event(external_message)` |
-| 插件（如 `context_compact.py`） | 可直接构造实时 `agent_event` 通知前端 |
+| 插件（如 `context_compact`，现已迁移为核心组件 `CompactHandler`） | 可构造实时 `agent_event` 通知前端；当前 `CompactHandler` 通过 `_notify()` 构造 BusMessage 并调用 `self._await(self.bus.publish_outbound(msg), timeout=5)` 推送 `context_compact_start / context_compact_done / context_compact_failed` 事件（`_await` 通过 `run_coroutine_threadsafe` 桥接回主事件循环，因为 `_notify()` 运行在线程中） |
 
 ## 消费
 
@@ -105,7 +105,8 @@ BusMessage 的主要构造入口：
 
 ```
 AgentLoop._publish_session_status()
-  │  BusMessage(type="global_event", to_channel="*", to_session="*",
+  │  BusMessage(type="global_event", from_channel="*", from_session="*",
+  │             to_channel="*", to_session="*",
   │             data={type:"session_status", data:{...}})
   ▼
 ChannelManager._dispatch_loop()
@@ -120,7 +121,7 @@ WebSocketChannel.send()
 
 两层判断各司其职：
 - `ChannelManager` 只认 `to_channel`，`"*"` 表示"扇给所有 Channel"。
-- 每个 Channel 的 `send()` 自行决定 `to_session == "*"` 时如何扇出。`ws_channel` 遍历全部连接；`subagent` / `cron` 是静默 channel，`send()` 本就 `return`，天然忽略。
+- 每个 Channel 的 `send()` 自行决定 `to_session == "*"` 时如何扇出。`ws_channel` 遍历全部连接；`subagent` / `cron` 是静默 channel，`send()` 本就 `return`，天然忽略。但 `ChannelManager._dispatch_loop()` 在 cron channel 的 outbound 分发后会将同一条消息镜像交给 ws channel（`MIRROR_TO_WS_CHANNELS = {"cron"}`）。镜像不是全局广播：`ws_channel.send()` 对普通 session 消息仍按 `to_session` 查 attach 连接，因此只有已 attach 该 cron session 的前端连接会收到；未 attach 时不会收到。注：镜像仅对 `to_channel` 为具体 Channel（非 `"*"`）的 outbound 生效；全局广播（`to_channel="*"`）时 ws_channel 已通过广播直接收到，无需镜像。
 
 ### 广播事件子类型
 
@@ -128,7 +129,7 @@ WebSocketChannel.send()
 
 | data.type | 说明 | 触发点 |
 |-----------|------|--------|
-| `session_status` | session 运行态变化 | `AgentLoop`（`_run()` 在 `_active_agents` 增删处发出；`_run_command()` 有结果时也会发） |
+| `session_status` | session 运行态变化 | `AgentLoop`（普通 Agent 执行由 `_run_async()` 在 `_active_agents` 增删处发出；`/compact` 指令由 `_cmd_compact()` 手动发出） |
 
 **session_status 的 data**：
 
@@ -147,24 +148,25 @@ WebSocketChannel.send()
 | `session_id` | string | 状态发生变化的 session（注意在 data 内，因为帧本身不绑定单一 session） |
 | `status` | string | `"running"`（Agent 或指令开始执行）/ `"idle"`（执行结束） |
 
-**强一致保证**：在 Agent 执行路径（`_run()`）中，`running` 在 `_active_agents[sid] = agent` 之后立即发，`idle` 在 `finally` 中 `pop` 之后发，广播信号与后端 `_active_agents` 的真实运行态由同一段代码守护，不会漂移。普通指令路径（`_run_command()`）也会发 `session_status`（让前端 `isBusy` 正确切换），但该路径不操作 `_active_agents`——命令执行不会创建 ReActAgent，`is_session_running()` 在命令执行期间返回 `False`。
+**Agent 执行路径的一致性**：在普通 Agent 执行路径（`_run_async()`）中，`running` 在 `_active_agents[sid] = agent` 之后立即发，`idle` 在 `finally` 中 `pop` 之后发，广播信号与后端 `_active_agents` 的真实运行态由同一段代码守护，不会漂移。`/compact` 指令路径不创建 `_active_agents`，由 `_cmd_compact()` 手动发送 `running` / `idle`，用于驱动前端 loading 状态。
 
-**初始快照**：广播只负责**增量**。新连接 / 刷新的前端，应通过 HTTP `GET /api/sessions` 获取当前各 session 的运行态作为初始快照，之后靠 `session_status` 广播保持同步。后端不在连接建立时补发快照，避免 `ws_channel` 反向依赖 `AgentLoop`。
+**初始快照**：广播只负责**增量**。新连接 / 刷新的前端，应通过 HTTP `GET /api/sessions` 获取普通 Agent 执行态的初始快照；该接口的 `running` 字段只表示 session 当前是否存在于 `AgentLoop._active_agents` 中，不包含 `/compact` 等命令态。`/compact` 的 busy 状态仅通过实时 `session_status` 广播表达，后端不会在连接建立时补发这类瞬时命令态快照。
 
-> **注意**：后端 global_event 基础设施已完整实现；前端当前会消费 `session_status`，一方面更新对应 chat bucket 的 `isBusy` / `error` / `retryState`，另一方面把它作为触发信号调用 `useSession.loadAllSessions()`，再通过 HTTP `GET /api/sessions` 重新获取会话列表运行态。
+> **注意**：后端 global_event 基础设施已完整实现；前端当前会消费 `session_status`，一方面直接更新对应 chat bucket 的 `isBusy` / `error` / `retryState`，另一方面把它作为触发信号调用 `useSession.loadAllSessions()`。但刷新会话列表得到的 HTTP `running` 字段只覆盖普通 ReActAgent 执行态，不能恢复 `/compact` 等不创建 `_active_agents` 的命令态。
 
 **并发丢弃不发事件**：`AgentLoop` 的并发防御（同 session 已运行时静默丢弃新 `user_input`）不改变运行态，因此不发 `session_status`。
 
 ## metadata 字段
 
-### 上行（客户端设置）
+### 上行（客户端设置 + ws_channel 注入）
 
 | 字段 | 类型 | 来源 | 说明 |
 |------|------|------|------|
 | `model` | string | 前端模型选择 UI | 当前选中的 LLM 模型（如 `"gpt-4o"`）。**注：前端发送，后端当前未使用（模型从配置文件加载）** |
 | `provider` | string | 前端模型选择 UI | 当前选中的 Provider 名称（如 `"openai"`）。**注：前端发送，后端当前未使用（Provider 从配置文件加载）** |
 | `agent_id` | string | 前端 | Agent ID，默认 `"code_agent"`。**注：前端发送，后端当前未使用** |
-| `session_id` | string | 前端 | 当前 session ID |
+| `session_id` | string | 前端 | 当前 session ID。**注：前端发送，后端从 `data.session_id` 读取，`metadata.session_id` 当前未使用** |
+| `frame_id` | string | `ws_channel._on_message()` | 由 ws channel 从上行帧 `id` 字段自动注入到 metadata（非客户端主动设置） |
 
 ### 下行（后端填充）
 
@@ -172,4 +174,4 @@ WebSocketChannel.send()
 |------|------|------|------|
 | `channel_id` | string | `ws_channel.send()` | 目标 Channel ID，即 `msg.to_channel`；普通 ws 消息为 `"ws"`，`global_event` 为 `"*"` |
 | `session_id` | string | `ws_channel.send()` | 目标 Session ID，即 `msg.to_session`；普通 session 消息为具体 session_id，`global_event` 为 `"*"` |
-| `frame_id` | string | `ws_channel._on_message()` | 客户端上行帧 `id`，echo 回传给前端去重 |
+| `frame_id` | string | 上行 metadata 透传（AgentLoop echo） | 客户端上行帧 `id`，经 AgentLoop echo 透传回前端用于占位去重 |

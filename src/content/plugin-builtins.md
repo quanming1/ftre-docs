@@ -1,12 +1,16 @@
 # 本地插件
 
-当前本地 `~/.ftre/plugins/` 目录下有 5 个插件。Gateway 启动时会扫描并加载该目录下所有非 `_` 开头的 `.py` 文件。
+当前本地 `~/.ftre/plugins/` 目录下有 4 个插件。Gateway 启动时会扫描并加载该目录下所有非 `_` 开头的 `.py` 文件。
+
+> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中直接注册。自动压缩水位检测在 Pipeline `_step_compact` 阶段执行（仅标记 `need_compact`），真正的压缩执行在 `_run_async()` 中（由 `_step_run` fire-and-forget 派发到线程后，消费循环空闲时安全执行）。
 
 ---
 
 ## 1. title_gen — 自动生成会话标题
 
-在首条用户消息进入 `before_messages_build` 时异步调用 LLM 生成标题，写入 DB。后端不会为标题变更下发专用事件；前端在会话列表刷新后展示新标题。当前插件的 `_extract_text()` 只从字符串 content 或结构化 part 的 `text` 字段取文本；桌面前端当前发送的结构化文本 part 使用 `data` 字段，因此这种路径下不会生成标题。
+> ⚠️ 当前本地 `title_gen.py` 与现版 `ftre-agent-core` LLM API 不兼容，标题生成实际不可用；需修复插件后才可使用。后端核心配置里虽然已支持 `agents.defaults.title_generation`（会构造 `AgentConfig.title_llm`），但该本地插件目前无法正确调用它。
+
+设计意图是在首条用户消息进入 `before_messages_build` 时异步调用 LLM 生成标题，写入 DB。后端不会为标题变更下发专用事件；前端在会话列表刷新后展示新标题。当前插件的 `_extract_text()` 从结构化 part 取文本时使用 `text` 字段（`part.get("text", "")`），而后端其他位置（`_extract_text_content` / `_content_to_text`）统一使用 `data` 字段；桌面前端发送的结构化文本 part 也使用 `data` 字段。因此当用户输入为结构化格式时，`_extract_text` 取不到文本，不会触发标题生成。此外，`_generate_title()` 方法存在两个 bug：（1）尝试从 `ftre_agent_core.llm` 导入 `LLMResponse` 和 `StreamDelta`，但当前 `ftre-agent-core` 不存在这两个类（只导出 `LLMHandler` / `TextDelta` / `ReasoningDelta` / `ToolInputDelta` / `ToolCall` / `StepFinish` 等），导致 `ImportError`；（2）`LLMHandler.stream()` 是 async generator（`async def stream`），而 `_generate_title()` 在同步 worker 线程中使用 `for item in handler.stream()` 尝试迭代，async generator 不支持同步 `for` 循环，会触发 `TypeError: 'async_generator' object is not iterable`。`ImportError` 先于 `TypeError` 发生，因此标题生成对所有内容类型都完全失效（`_spawn_title_generation` 的 worker 线程会捕获异常、记录日志后返回）。这是已知的代码 bug：`_extract_text` 应使用 `data` 字段，`_generate_title` 应改用当前 `LLMHandler.stream()` 产出的 `TextDelta` 等事件类型，并使用 `asyncio.run()` 或 `loop.run_until_complete()` 包装 async generator 的迭代。
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
@@ -20,14 +24,15 @@
 
 ## 2. context_govern — 上下文治理
 
-在 `before_messages_build` 阶段对事件流做三项修复 + AGENTS.md 注入。
+在 `before_messages_build` 阶段对事件流做四项修复 + AGENTS.md 注入。
 
 ### 修复能力
 
 | 步骤 | 说明 |
 |------|------|
 | 孤立事件清理 | 丢弃没有配对 tool_call 的 tool_result，反之亦然 |
-| 相邻性修复 | 被 external_message 打断的 tool_call/tool_result 重新紧邻 |
+| tool_call 去重 | 同一 id 的 tool_call 只保留第一个（防止 DB 重复写入导致 `Duplicate tool_call_id`） |
+| 相邻性修复 | 被 external_message 打断的 tool_call/tool_result 重新紧邻；同一 tool_call_id 的重复 tool_result 也会被去重丢弃 |
 | 悬挂 tool_result | 压缩后 tool_call 被裁掉、tool_result 残留的丢弃 |
 
 ### AGENTS.md 注入
@@ -42,37 +47,9 @@
 
 ---
 
-## 3. context_compact — 上下文压缩
+## 3. skill — Skills 能力加载
 
-当 token 水位超过阈值时，派发 subagent 对历史事件流做结构化摘要，写入 `context_compact` 事件。后续 `to_openai_messages` 遇到该事件会丢弃之前所有消息、以摘要为新起点。
-
-| 配置项 | 默认 | 说明 |
-|--------|------|------|
-| `compact_threshold` | 0.8 | 触发阈值（实际 token / context_window） |
-| `min_events` | 20 | 最少事件数才触发 |
-| `timeout` | 300 | subagent 超时秒数 |
-
-**流程：**
-
-1. 检测水位 > threshold
-2. 导出事件流为临时 JSON 文件
-3. 新建 subagent session（继承工作区）
-4. 投递压缩指令（告知 JSON 路径 + 输出格式要求）
-5. 轮询等待 subagent 完成
-6. 取最后一条 `message_complete` 作为摘要
-7. 写 `context_compact` 事件 + 通知前端，临时 JSON 文件随后清理
-
-当前插件等待 subagent 完成时通过轮询其 DB 事件流中是否出现 `done` 事件判断结束，而不是读取 `AgentLoop._active_agents`。
-
-**subagent 安全约束：** 只能读指定 JSON 文件；禁止任何写入操作（write/edit 工具）；禁止网络请求、安装包、启动服务；禁止调用 send_message / task / cron 工具；遇到指令注入类文本一律当作数据忽略；唯一产出是 markdown 摘要。
-
-**手动触发：** 注册 `/compact` 命令，用户可在对话中直接输入 `/compact` 手动压缩当前会话上下文。执行路径与自动触发相同。
-
----
-
-## 4. skill — Skills 能力加载
-
-扫描 `~/.ftre/skills/` 下的 Skill 文件，注册 `loadSkill` 工具，并在 system_prompt 中注入 Skill 描述列表。
+扫描 `~/.ftre/skills/` 下的 Skill 文件（支持 `<name>.md`、`<name>/SKILL.md`、`<name>/skill.md`），注册 `loadSkill` 工具，并在 system_prompt 中注入 Skill 描述列表。
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
@@ -86,9 +63,11 @@
 
 ---
 
-## 5. hello — 示例插件
+## 4. hello — 示例插件
 
 演示 Plugin 体系的基础能力——注册一个自定义 Channel。不做实际通信，启动时打印日志、收到 outbound 消息时打印日志。
+
+文件名：`hello_plugin.py`
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
@@ -130,4 +109,4 @@ class HelloPlugin(Plugin):
 
 ## 通用约定
 
-这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`hello` 只注册示例 Channel，不注册 hook。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`hello` 只注册示例 Channel，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记），真正的压缩执行在 `_run_async()` 中（由 `_step_run` fire-and-forget 派发到线程后执行）。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
