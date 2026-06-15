@@ -456,25 +456,35 @@
 - 清空 `retryState`
 - `isBusy` 的实际切换由紧随其后的 `session_status(idle)` 全局事件负责
 
-#### context_compact_start / context_compact_done / context_compact_failed
+#### context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed
 
-上下文压缩实时事件，插入/更新 `compact` 状态消息到消息列表。自动压缩路径由 Pipeline `_step_compact` 阶段（`CompactHandler.should_compact()` 判断水位 → 标记 `need_compact`）标记后，`_step_run` fire-and-forget 派发到线程中，`_run_async()` 在 Agent 正式执行前调用 `CompactHandler.compact()`；手动 `/compact` 路径由 `_step_command` 中指令 handler（`_cmd_compact`）触发，同样走到 `CompactHandler.compact()`。两条路径共用同一个 `compact()` 方法。
+上下文压缩实时事件。自动路径分两段：50% 水位后台准备 `context_compact(enabled=false)`，60% 水位启用最新 pending 事件。手动 `/compact` 直接生成 `enabled=true` 的压缩事件。
 
 **context_compact_start** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `events` | number | 压缩前事件数 |
-| `tokens` | number | 压缩前的 token 数（`_get_total_tokens` 返回值，无数据时为 0） |
-| `threshold` | number | 触发阈值（如 `0.8`） |
+| `tokens` | number | 压缩前估算 token |
+| `mode` | string | `prepare` / `force` / `manual` |
 
 **context_compact_done** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `tokens_before` | number \| undefined | 压缩前的 token 数（`_get_total_tokens` 有值时写入） |
+| `tokens_after` | number \| undefined | 启用后的估算 token；pending 事件可为空 |
+| `enabled` | bool | 压缩事件是否已启用 |
 | `events_before` | number | 压缩前事件数 |
 | `summary` | string | 压缩后的摘要 |
+
+**context_compact_enabled** data：
+
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `tokens_before` | number \| undefined | 启用前估算 token |
+| `tokens_after` | number \| undefined | 启用后估算 token |
+| `summary` | string | 摘要预览 |
 
 **context_compact_failed** data：
 
@@ -485,9 +495,10 @@
 **前端处理**：
 - `context_compact_start`：push 一条 `compact.status = "running"` 的 system 消息，同时写入 `tokensBefore`（来自 `data.tokens`，若存在）
 - `context_compact_done`：找最后一条 `running` 的 compact 消息，更新为 `status = "done"`，写入 `tokensBefore`（优先取 `data.tokens_before`，回退到 start 时写入的值）和 `summary`
+- `context_compact_enabled`：不渲染气泡，只触发 token usage 刷新
 - `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
 
-**注意**：这三类实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop.PERSISTENT_EVENTS` 白名单内，默认不会由 AgentLoop 持久化。桌面端 `ChatHeader` 的归档/压缩菜单当前调用 `POST /api/sessions/{id}/compact`，但后端尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+**注意**：这些实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop.PERSISTENT_EVENTS` 白名单内，默认不会由 AgentLoop 持久化。桌面端 `ChatHeader` 的归档/压缩菜单当前调用 `POST /api/sessions/{id}/compact`，但后端尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 
 #### context_compact — 历史回放专用
 
@@ -508,6 +519,7 @@
 | `summary` | string | 压缩摘要内容 |
 | `tokens_before` | number \| undefined | 压缩前 token 数（`_get_total_tokens` 有值时写入） |
 | `events_before` | number | 压缩前事件数 |
+| `enabled` | bool | 是否参与后端上下文重建；缺省 `true` 兼容旧事件 |
 
 #### external_message — 跨 session 消息注入
 
@@ -730,7 +742,7 @@
 
 ### context_compact — 上下文压缩
 
-`context_compact_start / done / failed` 事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）触发。后端 `to_openai_messages` 遇到 `context_compact` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点。这是 LLM 上下文管理的关键机制。
+`context_compact_start / done / enabled / failed` 事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）触发。后端 `to_openai_messages` 遇到 `context_compact(enabled=true)` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点；`enabled=false` 的 pending 事件会被忽略，直到 60% 水位启用。
 
 ### HTTP API 路由
 

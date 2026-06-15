@@ -2,7 +2,7 @@
 
 当前本地 `~/.ftre/plugins/` 目录下有 4 个插件。Gateway 启动时会扫描并加载该目录下所有非 `_` 开头的 `.py` 文件。
 
-> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中直接注册。自动压缩水位检测在 Pipeline `_step_compact` 阶段执行（仅标记 `need_compact`），真正的压缩执行在 `_run_async()` 中（由 `_step_run` fire-and-forget 派发到线程后，消费循环空闲时安全执行）。
+> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中直接注册。自动上下文管理采用 50% 预压缩、60% 启用的双水位：`_step_compact` 只标记是否需要启用/兜底，真正的启用或压缩执行在 `_run_async()` 中。
 
 ---
 

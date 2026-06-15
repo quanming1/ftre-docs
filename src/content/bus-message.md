@@ -67,7 +67,7 @@ class BusMessage:
 }
 ```
 
-`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_input`、`CompactHandler` 产生的 `context_compact_start / context_compact_done / context_compact_failed`，或 `send_message(kind="notify")` 产生的 `external_message`（data 内层含 `content`、`from_channel`、`from_session` 字段）。
+`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_input`、`CompactHandler` 产生的 `context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed`，或 `send_message(kind="notify")` 产生的 `external_message`（data 内层含 `content`、`from_channel`、`from_session` 字段）。
 
 ## 来源
 
@@ -81,7 +81,7 @@ BusMessage 的主要构造入口：
 | `AgentLoop._publish_session_status()` | 构造 `global_event(session_status)` |
 | `AgentLoop._cmd_compact._emit_status()` | `/compact` 指令内部构造 `global_event(session_status)`（running / idle），直接调用 `bus.publish_outbound()`（因 dispatch 运行在主事件循环协程中，不能使用 `run_coroutine_threadsafe`） |
 | `send_message._do_notify()` | 构造 `agent_event(external_message)` |
-| 插件（如 `context_compact`，现已迁移为核心组件 `CompactHandler`） | 可构造实时 `agent_event` 通知前端；当前 `CompactHandler` 通过 `_notify()` 构造 BusMessage 并调用 `self._await(self.bus.publish_outbound(msg), timeout=5)` 推送 `context_compact_start / context_compact_done / context_compact_failed` 事件（`_await` 通过 `run_coroutine_threadsafe` 桥接回主事件循环，因为 `_notify()` 运行在线程中） |
+| 插件（如 `context_compact`，现已迁移为核心组件 `CompactHandler`） | 可构造实时 `agent_event` 通知前端；当前 `CompactHandler` 通过 `_notify()` 构造 BusMessage 并调用 `self._await(self.bus.publish_outbound(msg), timeout=5)` 推送 `context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed` 事件（`_await` 通过 `run_coroutine_threadsafe` 桥接回主事件循环，因为 `_notify()` 运行在线程中） |
 
 ## 消费
 

@@ -154,6 +154,20 @@
 `agents.defaults.model` / `title_generation.model` 填写 Provider 端点所识别的原始模型名。当前 `ftre` 使用 OpenAI SDK 通过 `api_base` 指向兼容端点，`_build_model_name()` 函数直接返回该模型名（不做任何前缀拼接）。`providers[].models[].id` 主要用于前端展示，以及供后端匹配并补充 `name` / `context_window` / `max_output` / `vision` 等元数据；只要 Provider 存在且模型 ID 非空，即使没有匹配条目，`_build_llm_config()` 仍会使用配置中的模型 ID 构造 `LLMConfig.model`，只是这些元数据为空/默认值。Provider 不存在或模型 ID 为空时会返回空 LLM 配置。注意桌面端 ModelSettings UI 当前只能从 `models[]` 中选择默认模型/标题模型，因此通过 UI 操作时通常仍需先把模型写入列表：
 
 - 使用 OpenAI 兼容端点时，可直接填 `gpt-4o`、`deepseek-v4-pro` 等；建议在 `models[].id` 中放置同名条目，以便前端展示并让后端读取上下文窗口、视觉能力等元数据
+
+## agents.defaults.context
+
+上下文压缩配置。缺省即可启用双水位自动管理：
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `precompactThreshold` / `precompact_threshold` | number | `0.5` | 预压缩水位；达到后后台生成 `context_compact(enabled=false)` |
+| `compactThreshold` / `compact_threshold` | number | `0.6` | 启用水位；达到后启用 pending compact，没有 pending 时同步兜底压缩 |
+| `threshold` | number | - | 旧字段兼容别名，等价于 `compactThreshold` |
+| `consolidationRatio` / `consolidation_ratio` | number | `0.5` | 压缩目标占可用输入预算比例 |
+| `safetyBuffer` / `safety_buffer` | number | `1024` | 给估算误差和输出预留的安全余量 |
+| `idleCompaction` / `idle_compaction` | bool | `true` | 是否在 `done` / `usage_update` 后后台准备压缩 |
+| `silent` | bool | `true` | 自动压缩事件是否对前端静默 |
 - 如果目标端点需要特殊的 provider 前缀格式，在 `agents.defaults.model` / `title_generation.model` 中完整填写该字符串；如需前端展示和能力元数据，也在 `models[].id` 中填写同一个字符串
 
 > 当前 `api_protocol` 字段虽然存在于 Provider 配置中（默认 `"openai"`），但 `_build_model_name()` 未使用它来拼接前缀。这意味着 `api_protocol` 仅作为配置记录，不影响实际模型名构造，也不会改变 `LLMConfig.api_type`。

@@ -9,7 +9,7 @@ ftre 支持斜杠指令（`/`），在消息被 Agent 处理之前由 Pipeline �
 | 指令 | 参数 | 说明 | 注册位置 |
 |------|------|------|---------|
 | `/cancel` | 无 | 取消当前 session 正在执行的 Agent。handler 将 pipeline 的 inbound 替换为 `type="cancel"` 的 BusMessage，后续 `_step_run` 检测到 cancel 类型后调用 `agent.cancel_nowait()`；被取消的 Agent 自身产出 `done(success=false, reason="cancelled")` 作为最终信号 | `AgentLoop._register_commands()` |
-| `/compact` | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 fire-and-forget 方式派发压缩任务：通过 `asyncio.ensure_future` 启动 `_run_compact` 协程，后者在 `run_in_executor` 线程中执行 `CompactHandler.compact()`；压缩完成后通过 `_emit_status("idle")` 发送 `session_status` 全局事件通知前端结束 loading（而非 `done` 事件，因为 `/compact` 走命令短路、不走 `_run_async`）。`CompactHandler` 通过 `_notify()` 发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `context_compact` 持久化事件到 DB。handler 不修改 `ctx.meta["inbound"]`，但 `_step_command` 命中后设置 `command_hit=True`，后续 `_step_compact` 跳过已命中指令的 user_input，`_step_run` 中 `command_hit=True` 时不再将指令文本作为 user_input 送入 Agent | `AgentLoop._register_commands()` |
+| `/compact` | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 fire-and-forget 方式派发压缩任务：通过 `asyncio.ensure_future` 启动 `_run_compact` 协程，后者在 `run_in_executor` 线程中执行 `CompactHandler.compact(enabled=True, mode="manual")`；压缩完成后通过 `_emit_status("idle")` 发送 `session_status` 全局事件通知前端结束 loading（而非 `done` 事件，因为 `/compact` 走命令短路、不走 `_run_async`）。`CompactHandler` 通过 `_notify()` 发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入已启用的 `context_compact` 持久化事件到 DB。handler 不修改 `ctx.meta["inbound"]`，但 `_step_command` 命中后设置 `command_hit=True`，后续 `_step_compact` 跳过已命中指令的 user_input，`_step_run` 中 `command_hit=True` 时不再将指令文本作为 user_input 送入 Agent | `AgentLoop._register_commands()` |
 
 > `/compact` 指令已在 `AgentLoop._register_commands()` 中直接注册（不再通过插件 `command_manager`），可正常使用。`FtrePluginApi.command_manager` 运行时仍为 `None`（`main.py` 未将其传入 `PluginManager`），因此插件中条件注册的指令（如 `if command_manager is not None`）实际不会生效。
 
@@ -127,7 +127,7 @@ self.command_manager.register(
 5. `_step_compact`：`command_hit=True` → 跳过
 6. `_step_run`：`command_hit=True` → 不执行 Agent，短路终止
 
-`/compact` 的用户输入**不会**入库 USER_INPUT，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_emit_status` 发送的 `session_status` 全局事件控制（`running` → `idle`）。
+`/compact` 的用户输入**不会**入库 USER_INPUT，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_emit_status` 发送的 `session_status` 全局事件控制（`running` → `idle`）。
 
 ---
 

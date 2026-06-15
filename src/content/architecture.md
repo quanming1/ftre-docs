@@ -79,7 +79,7 @@
 
 全局单例（`AgentLoop`），消费所有 session 的消息，Pipeline 包含三个阶段：
 1. `_step_command`：对 `user_input` 类型且 `/` 开头的消息，交给 `CommandManager` 匹配；命中则 dispatch handler 并标记 `command_hit=True`（`/cancel` 替换 inbound 为 cancel 类型；`/compact` fire-and-forget 异步执行压缩）
-2. `_step_compact`：对未命中指令的 `user_input`，检测 token 水位是否超过压缩阈值，超阈值则将 `need_compact=True` 写入 pipeline data；绝不在此阶段执行压缩（本阶段运行在唯一 inbound 消费循环里，执行压缩会导致死锁），真正的压缩执行在 `_run_async()` 中（`_step_run` fire-and-forget 派发后，消费循环空闲时安全执行）
+2. `_step_compact`：对未命中指令的 `user_input`，检测 token 水位是否达到启用水位（默认 60%），超阈值则将 `need_compact=True` 写入 pipeline data；绝不在此阶段执行压缩（本阶段运行在唯一 inbound 消费循环里，执行压缩会阻塞消费循环），真正的启用/兜底压缩执行在 `_run_async()` 中
 3. `_step_run`：按最终 inbound 类型派发——`cancel` → `cancel_nowait()`；`user_input` 且 `command_hit` 未设置 → 通过 `asyncio.ensure_future(run_in_executor)` fire-and-forget 派发 `_run` 到线程池线程，`_run` 内部通过 `asyncio.run()` 创建独立事件循环执行 `_run_async()`，驱动 `ReActAgent`；`command_hit=True` → 短路终止
 
 ### Session Manager
@@ -99,8 +99,9 @@
 
 ### CompactHandler（上下文压缩）
 
-上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。两个入口：
-- `should_compact()`：自动压缩水位判断（async，只读 DB），在 Pipeline `_step_compact` 阶段调用。判断结果写入 pipeline data，不执行压缩
-- `compact()`：同步执行压缩（`/compact` 指令 或 自动压缩），在线程中调用。内部派发 subagent 并轮询等待完成
+上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。主要入口：
+- `should_compact()`：水位判断（async，只读 DB），由调用方传入 50% 预压缩水位或 60% 启用水位
+- `compact()`：同步执行 LLM 直调摘要，在线程中调用；50% 后台路径写 `context_compact(enabled=false)`，手动或兜底路径写 `enabled=true`
+- `enable_pending_compact()`：把最新 pending `context_compact` 原地更新为 `enabled=true`
 
-压缩流程：导出事件流为临时 JSON → 派发 subagent session → 轮询等待完成 → 取摘要 → 写 `context_compact` 事件到 DB → 通知前端。
+压缩流程：选择 head/tail 边界 → LLM 直调生成 anchored summary → 写 `context_compact` 事件到 DB；后续达到启用水位时更新 `enabled=true`，`SessionManager.to_openai_messages()` 才使用该摘要替代旧历史。
