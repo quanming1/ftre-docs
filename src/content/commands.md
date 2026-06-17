@@ -138,7 +138,7 @@ self.command_manager.register(
 4. `_dispatch()`：`try_dispatch_system()` 匹配到 `/cancel` → 执行 `_on_cancel` → 直接调用 `agent.cancel_nowait()` 和 `task.cancel()` → 返回 `True`，短路退出
 5. 被取消的 Agent 或 task 产出 `done(success=false, reason="cancelled")`
 
-`/cancel` 的用户输入**不会**入库 USER_INPUT（因为 `_dispatch` 在系统级指令命中后直接 return，不走 Pipeline），也**不会** echo 给前端。
+`/cancel` 的用户输入**不会**入库 `user_message`（因为 `_dispatch` 在系统级指令命中后直接 return，不走 Pipeline），也**不会** echo 给前端。
 
 ### /compact 的完整流程
 
@@ -149,7 +149,7 @@ self.command_manager.register(
 5. `_step_command`：检测到 `/compact`，`try_dispatch()` 匹配 → 执行 `_cmd_compact` handler → handler async 直接 await 压缩 → 返回命中 → `_step_command` 返回 `False`（短路终止 Pipeline）
 6. `_step_compact` 和 `_step_run` 不再执行
 
-`/compact` 的用户输入**不会**入库 USER_INPUT，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 异步发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_publish_session_status_async` 发送的 `session_status` 全局事件控制（`running` → `idle`）。
+`/compact` 的用户输入**不会**入库 `user_message`，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 异步发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_publish_session_status_async` 发送的 `session_status` 全局事件控制（`running` → `idle`）。
 
 ---
 

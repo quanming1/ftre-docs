@@ -397,7 +397,7 @@ _user_input 到达 AgentLoop_
 
 ### user_message
 
-工具返回 `AgentEvent`（非 `str`）时，`react_runner` 将此事件注入 memory 作为 user message。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
+工具返回 `AgentEvent`（非 `str`）时，`react_runner` 在所有 `tool_result` 之后统一注入此事件到 memory。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
 
 典型场景：`see_img` 工具返回 `UserMessageEvent(content=[image_url])`，Agent 无需等待用户即可识别图片内容。
 

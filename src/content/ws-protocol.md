@@ -312,9 +312,9 @@
 
 #### tool_cancel_requested / tool_cancelled
 
-这两个类型属于预留/可持久化事件（在 `AgentLoop.PERSISTENT_EVENTS` 中），但它们不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应构造函数，当前主运行路径不会产出这些事件。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
+这两个类型曾在 `AgentLoop.PERSISTENT_EVENTS`（已改为 `_PERSISTENT_CLASSES`）中被列出，但它们不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
-注意：`tool_timed_out` 不在 `PERSISTENT_EVENTS` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
+注意：`tool_timed_out` 不在 `_PERSISTENT_CLASSES` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
 #### reasoning — LLM 思考文本片段
 
@@ -460,7 +460,7 @@
 
 #### context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed
 
-上下文压缩实时事件。自动路径分两段：50% 水位后台准备 `context_compact(enabled=false)`，60% 水位启用最新 pending 事件。手动 `/compact` 直接生成 `enabled=true` 的压缩事件。
+上下文压缩实时事件。当前实际代码路径中，自动压缩与关键路径压缩都统一按 `precompact_threshold`（默认 50%）触发，并直接写入 `context_compact(enabled=true)`；`enable_pending_compact()` 与 `context_compact_enabled` 仍然保留用于兼容历史上可能存在的 pending（`enabled=false`）事件，但当前代码没有新的 `enabled=false` 写入路径。手动 `/compact` 也会先尝试启用历史 pending，没有则直接生成 `enabled=true` 的压缩事件。
 
 **context_compact_start** data：
 
@@ -504,7 +504,7 @@
 - `context_compact_enabled`：不渲染气泡，只触发 token usage 刷新
 - `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
 
-**注意**：这些实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop.PERSISTENT_EVENTS` 白名单内，默认不会由 AgentLoop 持久化。桌面端 `ChatHeader` 的归档/压缩菜单当前调用 `POST /api/sessions/{id}/compact`，但后端尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+**注意**：这些实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop._PERSISTENT_CLASSES` 白名单内，不经过 AgentLoop 持久化路径（`context_compact` 事件本身由 `CompactHandler.compact()` 直接调用 `save_message()` 写入 DB）。桌面端 `ChatHeader` 的归档/压缩菜单当前调用 `POST /api/sessions/{id}/compact`，但后端尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 
 #### context_compact — 历史回放专用
 
@@ -527,7 +527,7 @@
 | `trigger_ratio` | number | 生成该压缩事件时的水位 |
 | `enable_ratio` | number | 启用水位（配置的 `compact_threshold`） |
 | `events_before` | number | 被摘要覆盖的事件数 |
-| `tokens_before` | number \| undefined | 压缩前 token 数 |
+| `tokens_before` | number | 压缩前 token 数 |
 | `tokens_after` | number \| undefined | 启用后估算 token；仅 `enabled=true` 时写入 |
 | `silent` | bool | 是否静默（可选；仅 `silent=true` 时写入） |
 
@@ -600,7 +600,7 @@
 
 **当前状态**：后端已完整实现 global_event 的生成与扇出；前端已消费 `session_status`，用于同步当前会话 busy 状态，并作为刷新会话列表的触发信号。
 
-**注意**：`session_status` 不在 `PERSISTENT_EVENTS` 中，不写入 DB，历史回放（`GET /api/sessions/:id/messages`）不会出现。
+**注意**：`session_status` 不在 `_PERSISTENT_CLASSES` 中，不写入 DB，历史回放（`GET /api/sessions/:id/messages`）不会出现。
 
 ---
 
@@ -732,9 +732,9 @@
 
 ## 补充说明
 
-### USER_INPUT（大写）— 历史回放事件
+### user_message — 历史回放用户消息
 
-`USER_INPUT` 仅出现在 HTTP API `GET /api/sessions/:id/messages` 返回的历史记录中，**不会**通过 WebSocket 实时下发。前端 `applyEvent` 有独立的 `case "USER_INPUT"` 分支处理，与实时 `user_input` echo 区分。
+`user_message` 出现在 HTTP API `GET /api/sessions/:id/messages` 返回的历史记录中。真实用户输入写入为 `metadata.hide=false`，工具注入给 LLM 的隐藏 user message 写入为 `metadata.hide=true`。实时 WebSocket echo 仍使用小写 `user_input`，用于本轮输入去重和跨 session 展示。
 
 ### external_message 的 LLM 转换
 
@@ -763,11 +763,11 @@
 | GET | `/api/config` | 读取 `~/.ftre/config.json` |
 | PUT | `/api/config` | 覆盖写 `~/.ftre/config.json` |
 | GET | `/api/health` | 健康检查 |
-| POST | `/api/sessions` | 创建 session（`channel_id` 必填 query param，`title`/`workspace` 可选 query param） |
+| POST | `/api/sessions` | 创建 session（`channel_id` 必填 query param，`title`/`workspace` 可选 query param；若省略 `workspace`，后端当前会以空串落库，不会自动写入 `agents.defaults.workspace`） |
 | GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤；返回 `{sessions, total, limit, offset}`，其中每个 session 附带 `running` 字段；该字段仅表示该 session 是否存在于 `AgentLoop._active_agents` 中，即是否有普通 ReActAgent 正在执行，不包含 `/compact` 等不创建 `_active_agents` 的命令态） |
 | PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
 | DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
-| GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；前端分页加载代码会拼 `limit`/`before_ts`/`after_ts` 到 URL 并读取 `has_more`/`total`，但后端不读取这些查询参数且只返回 `{"messages": [...]}`，因此首屏/分页请求都会被当作全量请求处理，前端因缺少 `has_more` 认为没有更早页；`USER_INPUT` 历史事件来自这里） |
+| GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；前端分页加载代码会拼 `limit`/`before_ts`/`after_ts` 到 URL 并读取 `has_more`/`total`，但后端不读取这些查询参数且只返回 `{"messages": [...]}`，因此首屏/分页请求都会被当作全量请求处理，前端因缺少 `has_more` 认为没有更早页；真实用户输入历史事件为 `user_message(metadata.hide=false)`） |
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区（支持 `channel_id` 过滤；默认 `ws`） |
 | GET | `/api/skills` | 列出所有 Skill 元信息 |
@@ -786,6 +786,6 @@
 | PATCH | `/api/mcp/{name}` | 局部更新 MCP 服务器配置并增量重连 |
 | DELETE | `/api/mcp/{name}` | 删除 MCP 服务器并断开连接（返回 204） |
 
-> 桌面端 `triggerCompaction()` 当前会请求 `POST /api/sessions/:id/compact`，但后端 `routes.py` 尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+> 桌面端 `triggerCompaction()` 当前仍会请求 `POST /api/sessions/:id/compact`（见 `packages/renderer/src/services/api.ts`），但后端 `routes.py` 尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 
 `GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数，所有请求都会得到全量消息。

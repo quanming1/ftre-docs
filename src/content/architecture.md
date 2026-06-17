@@ -112,25 +112,36 @@
 
 ### CompactHandler（上下文压缩）
 
-上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。**全异步实现**，所有方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）均为 async，直接在主事件循环内 await，不再使用 `run_in_executor` 或 `run_coroutine_threadsafe`。
+上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。**对外入口是全异步实现**，主要方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）都在主事件循环内 await；但工具线程使用的 `WorkspaceAccessor` 仍会通过 `run_coroutine_threadsafe` 读写 session 的 `workspace`。
 
 主要入口：
-- `should_compact()`：水位判断（async，只读 DB），由调用方传入预压缩水位或启用水位
-- `compact()`：异步执行 LLM 直调摘要；所有路径均写 `context_compact(enabled=true)`（含后台 idle/usage 路径和用户输入关键路径）。`compact(enabled=False)` 分支仅作为兼容预留存在，当前无调用方传入 `False`
-- `enable_pending_compact()`：把历史上可能存在的 pending（`enabled=false`）`context_compact` 原地更新为 `enabled=true`；当前无代码写入 `enabled=false`，因此该调用总是返回 `False`，随后回退到 `compact(enabled=true)`
+- `should_compact()`：水位判断（async，只读 DB），默认会看 `compact_threshold`，但当前所有调用方都显式传入 `precompact_threshold`（默认 0.5）
+- `compact()`：异步执行 LLM 直调摘要；当前后台 idle/usage 路径与用户输入关键路径实际都写 `context_compact(enabled=true)`。`compact(enabled=False)` 分支仍保留在代码里，作为兼容历史预压缩/pending 逻辑的入口，但当前没有调用方传入 `False`
+- `enable_pending_compact()`：把历史上可能存在的 pending（`enabled=false`）`context_compact` 原地更新为 `enabled=true`；当前没有新写入 `enabled=false` 的路径，因此该调用通常返回 `False`，随后回退到 `compact(enabled=true)`
+
+### 工具能力裁剪（Tool Capability Gating）
+
+`build_default_tools()` 根据当前模型配置决定注册哪些工具。不支持视觉的模型不会注册 `see_img`，避免模型调用无效工具。
+
+```python
+def build_default_tools(..., llm_config=None):
+    tools = [bash, read, write, edit, set_workspace, cron, ...]
+    if getattr(llm_config, "vision", False):
+        tools.append(see_img)
+```
 
 ### Tool → AgentEvent 注入
 
-工具可返回 `AgentEvent` 实例（不仅是 `str`），`react_runner` 检测后注入 memory 作为 user message。这使 Agent 无需等待用户即可"看到"图片等多模态内容。
+工具可返回 `AgentEvent` 实例（不仅是 `str`），`react_runner` 检测后注入 memory。注入分两阶段：先写完所有 `tool_result`，再统一追加 `UserMessageEvent`，确保 OpenAI message 顺序合法（`assistant → tool → user`，不能交错）。
 
-流程：`tool.func() → AgentEvent → ToolResult.event → react_runner: memory.add_raw(ev.to_openai_message()) → LLM 下一轮看到`
+流程：`tool.func() → AgentEvent → ToolResult.event → react_runner 两阶段写入 → LLM 下一轮看到`
 
 ### see_img 工具
 
-内置图片查看工具，支持本地绝对路径和 HTTP(S) URL。大图自动压缩（>5MB 或 >4096px 时 resize）。非图片文件返回文本内容。
+内置图片查看工具，支持本地绝对路径和 HTTP(S) URL。大图自动压缩（>5MB 或 >4096px resize），统一转 JPEG。仅在 `llm_config.vision=True` 时注册。
 
 返回 `UserMessageEvent(content=[image_url])`，LLM 直接看到图片，前端隐藏（`metadata.hide=true`）。
 
 ### Agent 事件体系
 
-事件从裸 dict 迁移为 `@dataclass` 类（11 个子类 + `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON 走线和 DB 存储。详见 [Agent 事件协议](/docs/agent-events)。
+事件从裸 dict 迁移为 `@dataclass` 类（12 个子类含 `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。

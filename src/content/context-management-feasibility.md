@@ -1,8 +1,10 @@
 # 上下文压缩简化方案：可行性分析
 
-> 旧方案记录：本文分析的是“单阈值 + 立即启用”的中间方案，曾计划演进为“双水位”。
-> 最新设计见 `context-management.md`，最终实现采用了“单阈值（默认 50%）直接
-> `enabled=true`”模型，当前代码无 `enabled=false` 写入路径。
+> 历史方案记录：本文保留的是更早期的可行性分析，**不代表当前实现**。
+> 当前实际行为请以 `context-management.md` 为准：代码仍保留两个配置水位字段
+> `precompact_threshold`（默认 0.5）与 `compact_threshold`（默认 0.6），但现有调用路径统一按
+> `precompact_threshold` 触发压缩；当前代码没有写入 `enabled=false` 的路径，因此
+> `enable_pending_compact()` 只承担兼容旧数据/历史数据的职责。
 
 ## 0. 目标
 
@@ -198,13 +200,12 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 
 ## 7. 结论
 
-**可行性：✅ 完全可行**
+**结论（历史）：该文档对应的简化方向曾被论证为可行。**
 
-简化后的架构与 OpenCode/Nanobot 的核心思路一致——单一 LLM 调用 + 单一阈值触发。
-ftre 因为事件流存储模型多出了 timestamp 游标和 silent 标记，
-但这两点是架构约束导致的合理复杂度，不是过度设计。
+但从当前源码看，最终落地并不是本文中描述的那套“删掉一批字段、完全只保留一个配置阈值”的版本，而是：
+- 保留了 `precompact_threshold` 与 `compact_threshold` 两个配置字段；
+- 实际触发路径统一使用 `precompact_threshold`（默认 0.5）；
+- `compact_threshold` 当前主要体现在压缩事件的 `enable_ratio` 元数据中；
+- `enabled=false` / pending 启用逻辑仍保留在代码里用于兼容，但当前没有新写入路径。
 
-改动范围可控（后端净减 ~285 行），无破坏性变更，向后兼容（旧 `context_compact` 事件里的
-`mode` 字段前端不消费，`to_openai_messages` 不依赖 `mode`）。
-
-唯一暂不处理的 LLM 失败场景，实际风险低（API 稳定性足够），后续可按需加轻量兜底。
+因此，本文适合作为**设计演化背景**阅读，不应再作为实现说明引用；实现说明请看 `context-management.md`。

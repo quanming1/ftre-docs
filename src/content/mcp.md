@@ -74,9 +74,16 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
 
 ## 管理接口
 
-### 前端设置页
+### 前端设置入口
 
-设置页 > MCP 服务器 tab 提供完整管理：
+当前桌面端有两个 MCP 入口：
+
+- **标题栏 🔌 按钮**：弹出 `McpPopover`，可查看服务器状态、快速启/禁用，并跳转到设置页
+- **全局设置对话框的 MCP section**：`SettingsDialog` 已支持 `section: "mcp"`，并渲染 `McpSettings`
+
+> 注意：旧的 `SettingsPanel` 首页当前只内置了 `agents / models / gateway` 三个入口；MCP 不在这个首页列表里，但并不影响通过标题栏或 `ftre:open-settings` 事件直接进入 MCP 设置。
+
+`McpSettings` 提供完整管理：
 
 - **查看**：卡片列表显示所有服务器及连接状态
 - **添加**：填写 type、command/url 等字段创建新服务器
@@ -112,7 +119,7 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
 - **删除**：断开连接 → 注销工具
 - **启/禁用**：等同于添加/删除
 
-Gateway 每 3 秒检测一次 `config.json` 的 MCP 段变化。
+除了通过 API 立即触发热重载外，Gateway 还会每 3 秒轮询一次 `config.json` 的 `mcp` 段变化，作为文件级兜底 watcher。
 
 ## 推荐的 MCP 服务器
 

@@ -1,9 +1,11 @@
 # 上下文管理机制
 
-> ftre 的上下文压缩采用单阈值（默认 50%）触发模型：水位达到
-> `precompact_threshold` 时，idle 后台路径直接写入 `context_compact(enabled=true)`；
+> ftre 当前的上下文压缩**实际触发路径**统一使用 `precompact_threshold`（默认 50%）：
+> idle / usage 后台路径直接写入 `context_compact(enabled=true)`；
 > 用户输入路径标记 `need_compact` 后在 `_run_async()` 中同样写入 `enabled=true`。
-> `compact_threshold`（默认 60%）当前仅作为事件元数据记录，不参与触发决策。
+> 但配置结构仍保留两个字段：`precompact_threshold`（默认 0.5）与
+> `compact_threshold`（默认 0.6）。后者当前主要写入 `enable_ratio` 元数据，
+> 不参与现有调用方的触发判断。
 > 压缩事件只改变上下文重建视图，不物理删除历史。
 
 ---
@@ -14,7 +16,7 @@
 |------|------|
 | 降低延迟 | 50% 水位提前后台压缩，把 LLM 摘要耗时挪到 idle / usage 事件之后 |
 | 降低信息损失 | 旧历史压缩为摘要 + 保留最近 tail 原文 |
-| 防止溢出 | 50% 水位触发压缩，写入 `enabled=true` 的 compact 事件 |
+| 防止溢出 | 实际调用路径在 50% 水位触发压缩，写入 `enabled=true` 的 compact 事件 |
 | 用户无感 | 自动压缩 `silent=true`，前端不渲染气泡；手动 `/compact` 才显示 |
 
 ---
@@ -82,7 +84,7 @@
 | `trigger_ratio` | number | 生成该压缩事件时的水位 |
 | `enable_ratio` | number | 启用水位（配置的 `compact_threshold`） |
 | `events_before` | number | 被摘要覆盖的事件数 |
-| `tokens_before` | number \| null | 压缩前估算 token |
+| `tokens_before` | number | 压缩前估算 token |
 | `tokens_after` | number \| undefined | 启用后 `summary + tail` 的估算 token；仅 `enabled=true` 时写入 |
 | `silent` | bool | 前端是否静默（可选；仅 `silent=true` 时写入） |
 
@@ -110,8 +112,8 @@ target = budget * consolidation_ratio
 ### 4.2 head / tail
 
 从最新已启用游标之后开始选择压缩范围：
-- head = 游标之后全部事件（不做 `USER_INPUT` 边界选择，整段送入 LLM 摘要）。
-- tail = 压缩事件之后的后续新增事件。由于 compact 事件以 `timestamp=now` 写在事件流末尾，写入时 tail 为空；后续 `USER_INPUT` / Agent 事件追加到 compact 之后自动成为 tail。
+- head = 游标之后全部事件（不做 `user_message` 边界选择，整段送入 LLM 摘要）。
+- tail = 压缩事件之后的后续新增事件。由于 compact 事件以 `timestamp=now` 写在事件流末尾，写入时 tail 为空；后续 `user_message` / Agent 事件追加到 compact 之后自动成为 tail。
 - `to_openai_messages` 遇到 `enabled=true` 的 compact 事件后清空旧 messages 并注入摘要，随后 tail 原文照常重建，自然形成"摘要 + 最近原文"的 LLM 视图。
 
 ### 4.3 摘要
@@ -201,7 +203,7 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 |------|------|------|
 | `enabled` | bool | 该事件是否已启用 |
 | `events` | number | 被摘要覆盖的事件数 |
-| `tokens_before` | number \| null | 压缩前估算 token |
+| `tokens_before` | number | 压缩前估算 token |
 | `tokens_after` | number \| null | 启用后估算 token |
 | `summary` | string | 摘要预览 |
 | `silent` | bool | 是否静默 |
@@ -214,7 +216,7 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 |------|------|------|
 | `enabled` | bool | 固定 `true`（启用成功） |
 | `events` | number | 被摘要覆盖的事件数 |
-| `tokens_before` | number \| null | 启用前估算 token |
+| `tokens_before` | number | 启用前估算 token |
 | `tokens_after` | number \| null | 启用后估算 token |
 | `summary` | string | 摘要预览 |
 | `silent` | bool | 是否静默（可选；`silent=true` 时显式写入） |

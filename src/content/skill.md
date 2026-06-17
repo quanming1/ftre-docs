@@ -118,34 +118,26 @@ Agent 可在 SKILL.md 中引用 `references/` 下的文档路径。
 
 ## 系统提示词注入
 
-Skill 插件（`skill_plugin.py`）启动时扫描 `~/.ftre/skills/`，将所有 Skill 的能力描述摘要注入到系统提示词中，Agent 据此判断何时加载哪个 Skill。
+当前 Skill 的管理与读取能力由后端内置 API/工具提供：
+- HTTP API 通过 `ftre/api/skill.py` + `ftre/api/routes.py` 读取 `~/.ftre/skills/`
+- Agent 侧通过 `loadSkill` 工具按需读取完整内容
 
-注入格式为：
-```
-可用能力 (skills)：
-- frontend-design: 创建高质量前端界面
-- mcp-guide: MCP 配置与排错指导
-- skill-creator: 创建新的 Skill
-```
+同时，当前后端源码中的注释仍明确约定：Skill 的描述会被插件注入到 system prompt，并提供 `loadSkill` 工具按需读取完整内容（见 `ftre/api/routes.py` 与 `ftre/api/skill.py` 中的说明）。因此可以确认的运行时设计是：
+- Skill 摘要会进入系统提示词，供 Agent 判断是否需要加载；
+- Skill 正文在需要时通过 `loadSkill` 读取；
+- 前端的 Skill 管理 UI 走的是同一套本地文件存储。
 
 ## 生命周期
 
 ```
-Skill 插件启动
+Skill 文件保存在 ~/.ftre/skills/
   │
-  ├─ 扫描 ~/.ftre/skills/
-  ├─ 生成能力描述摘要
-  └─ 注入系统提示词（before_messages_build hook）
+  ├─ 后端 API 可列出 / 读取 / 增删改这些文件
+  └─ Agent 在需要时调用 loadSkill(name)
         │
-        ▼
-Agent 运行中
-  │
-  ├─ 用户请求匹配某 Skill → loadSkill() 读取完整内容
-  ├─ 同一 Skill 只加载一次
-  └─ Skill 内容追加到当前对话上下文
-        │
-        ▼
-Agent 按 Skill 流程执行任务
+        ├─ 读取完整正文
+        ├─ 同一 Skill 在当前对话通常只加载一次
+        └─ 按 Skill 内容指导后续执行
 ```
 
 ## 与 MCP 的关系
