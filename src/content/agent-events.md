@@ -1,8 +1,6 @@
 # Agent 事件协议
 
-Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（类型安全、属性访问、IDE 补全），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "data": { ... }}` 走线传输和 DB 存储。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
-
-> **后向兼容**：所有 `@dataclass` 实例同时支持 `__getitem__` / `get()` 字典风格访问（`event["type"]` / `event.get("data")`），旧代码无需修改即可运行。新代码推荐用 `isinstance(event, ToolCallEvent)` + 属性访问。
+Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（`isinstance` 检查 + 属性访问），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "data": { ... }}` 走线传输和 DB 存储。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
 
 本页主要描述 core `ReActAgent` 事件；`AgentLoop`、命令、压缩与工具层注入的扩展事件会在相应章节单独说明。
 
