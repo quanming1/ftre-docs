@@ -1,6 +1,29 @@
 # Agent 事件协议
 
-Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。所有事件格式为 `{"type": "<EventType>", "data": { ... }}`，由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。本页主要描述 core `ReActAgent` 事件；`AgentLoop`、命令、压缩与工具层注入的扩展事件会在相应章节单独说明。
+Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（类型安全、属性访问、IDE 补全），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "data": { ... }}` 走线传输和 DB 存储。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
+
+> **后向兼容**：所有 `@dataclass` 实例同时支持 `__getitem__` / `get()` 字典风格访问（`event["type"]` / `event.get("data")`），旧代码无需修改即可运行。新代码推荐用 `isinstance(event, ToolCallEvent)` + 属性访问。
+
+本页主要描述 core `ReActAgent` 事件；`AgentLoop`、命令、压缩与工具层注入的扩展事件会在相应章节单独说明。
+
+## 事件类层次
+
+```
+AgentEvent (基类 @dataclass)
+ ├─ ToolCallEvent          — type = "tool_call"
+ ├─ ToolResultEvent        — type = "tool_result"
+ ├─ MessageEvent           — type = "message"
+ ├─ MessageCompleteEvent   — type = "message_complete"
+ ├─ ReasoningEvent         — type = "reasoning"
+ ├─ ReasoningCompleteEvent — type = "reasoning_complete"
+ ├─ ErrorEvent             — type = "error"
+ ├─ RetryEvent             — type = "retry"
+ ├─ DoneEvent              — type = "done"
+ ├─ ToolCallStreamingEvent — type = "tool_call_streaming"
+ └─ UsageUpdateEvent       — type = "usage_update"
+```
+
+每个子类字段与下表 data 字段一一对应（如 `ToolCallEvent.tool_id` 对应 `data.id`）。
 
 ## 事件类型总览
 
@@ -173,7 +196,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 
 ### tool_cancel_requested / tool_cancelled
 
-这两个事件类型在 `AgentLoop.PERSISTENT_EVENTS` 中被列出（以便未来实现时能自动持久化），但不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应的事件构造函数，当前主运行路径不产出它们：
+这两个事件类型曾在 `AgentLoop.PERSISTENT_EVENTS`（已改为 `_PERSISTENT_CLASSES`）中被列出，但不在 `EventType` 枚举中，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
 
 - 取消最终通过 `done(success=false, reason="cancelled")` 表达；如果工具任务被取消/中断，可能额外产出 `tool_result(status="cancelled")`，但不应依赖每次取消都有 cancelled 状态的 `tool_result`。
 - 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。
