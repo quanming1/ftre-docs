@@ -10,8 +10,8 @@ Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。�
 AgentEvent (基类 @dataclass)
  ├─ ToolCallEvent          — type = "tool_call"
  ├─ ToolResultEvent        — type = "tool_result"
- ├─ MessageEvent           — type = "message"
- ├─ MessageCompleteEvent   — type = "message_complete"
+ ├─ AssistantMessageEvent           — type = "assistant_message"
+ ├─ AssistantMessageCompleteEvent   — type = "assistant_message_complete"
  ├─ ReasoningEvent         — type = "reasoning"
  ├─ ReasoningCompleteEvent — type = "reasoning_complete"
  ├─ ErrorEvent             — type = "error"
@@ -28,8 +28,8 @@ AgentEvent (基类 @dataclass)
 
 | type | 说明 | 何时产生 |
 |------|------|---------|
-| `message` | LLM 流式文本片段 | LLM 每输出一段文字 |
-| `message_complete` | LLM 一轮文本完成 | 流式收束 / 工具调用前 |
+| `assistant_message` | LLM 流式文本片段 | LLM 每输出一段文字 |
+| `assistant_message_complete` | LLM 一轮文本完成 | 流式收束 / 工具调用前 |
 | `reasoning` | LLM 思考文本片段 | 支持 thinking 的模型输出 reasoning |
 | `reasoning_complete` | LLM 思考文本完成 | 流式收束 / 工具调用前 |
 | `tool_call` | 工具调用 | 解析 LLM 返回的 tool_calls 后 |
@@ -47,13 +47,13 @@ AgentEvent (基类 @dataclass)
 
 ## 事件详细定义
 
-### message
+### assistant_message
 
-LLM 流式输出的**增量文本片段**。
+LLM 流式输出的**增量文本片段**（assistant role）。
 
 ```json
 {
-  "type": "message",
+  "type": "assistant_message",
   "data": {
     "content": "你好，我是"
   }
@@ -66,13 +66,13 @@ LLM 流式输出的**增量文本片段**。
 
 **产生**：`ReActRunner._stream_turn()` 中 `async for event in self.llm.stream()` 的 `TextDelta` 分支。
 
-### message_complete
+### assistant_message_complete
 
 LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
 
 ```json
 {
-  "type": "message_complete",
+  "type": "assistant_message_complete",
   "data": {
     "content": "你好，我是 ftre，一个 AI 编程助手。"
   }
@@ -220,7 +220,7 @@ LLM 返回的 **Token 用量**。
 }
 ```
 
-**产生**：`StepFinish.usage` 不为空时。底层适配器在 OpenAI 流结束后会先 finalize 出完整 `ToolCall*` 内部事件，再产出 `StepFinish`；`react_runner` 收到 `ToolCall` 时会先记录并启动工具任务，收到随后的 `StepFinish` 后如果 `usage` 不为空则发出 `usage_update`。由于 `StepFinish` 仍在 `_stream_turn()` 的流循环内处理，而 `message_complete` 在流循环结束后才产出，因此对外 `usage_update` 始终出现在 `message_complete` 之前。
+**产生**：`StepFinish.usage` 不为空时。底层适配器在 OpenAI 流结束后会先 finalize 出完整 `ToolCall*` 内部事件，再产出 `StepFinish`；`react_runner` 收到 `ToolCall` 时会先记录并启动工具任务，收到随后的 `StepFinish` 后如果 `usage` 不为空则发出 `usage_update`。由于 `StepFinish` 仍在 `_stream_turn()` 的流循环内处理，而 `assistant_message_complete` 在流循环结束后才产出，因此对外 `usage_update` 始终出现在 `assistant_message_complete` 之前。
 
 ### retry
 
@@ -241,7 +241,7 @@ LLM 调用遇到**可重试错误**（网络/超时/限流等），准备重试�
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
 | `code` | string | 错误码 |
-| `message` | string | 错误描述 |
+| `assistant_message` | string | 错误描述 |
 | `attempt` | int | 当前重试次数（从 1 开始） |
 | `max_attempts` | int | 最大重试次数（不含首次尝试） |
 
@@ -261,7 +261,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
-| `message` | string | 错误描述 |
+| `assistant_message` | string | 错误描述 |
 | `code` | string | 错误码 |
 
 常见错误码：
@@ -310,19 +310,19 @@ _user_input 到达 AgentLoop_
   │   ├─ _stream_turn() 第 1 轮（有工具调用）
   │   │   ├─ LLM stream
   │   │   │   ├─ reasoning             (chunk 1，如有)
-  │   │   │   ├─ message               (chunk，如有文本输出)
+  │   │   │   ├─ assistant_message          (chunk，如有文本输出)
   │   │   │   └─ tool_call_streaming   (arg chunks)
   │   │   ├─ usage_update              (StepFinish.usage，如有)
   │   │   ├─ reasoning_complete          (如有思考内容)
-  │   │   ├─ message_complete            (如有文本)
+  │   │   ├─ assistant_message_complete     (如有文本)
   │   │   ├─ tool_call → tool_result   (交替，每个 tool 一对)
   │   │
   │   ├─ _stream_turn() 第 2 轮（直接回复）
   │   │   ├─ LLM stream
-  │   │   │   ├─ message               (chunk 1)
-  │   │   │   └─ message               (chunk 2)
+  │   │   │   ├─ assistant_message          (chunk 1)
+  │   │   │   └─ assistant_message          (chunk 2)
   │   │   ├─ usage_update              (StepFinish.usage，如有)
-  │   │   ├─ message_complete
+  │   │   ├─ assistant_message_complete
   │   │   └─ done (success=true, reason="completed")
   │   │
   │   └─ _loop() 结束
@@ -351,20 +351,20 @@ _user_input 到达 AgentLoop_
 
 | 实际类型 | 字段 | 对应产出事件 |
 |---------|------|-------------|
-| `TextDelta` | `text: str` | → 产出一条 `message` 事件 |
+| `TextDelta` | `text: str` | → 产出一条 `assistant_message` 事件 |
 | `ReasoningDelta` | `text: str` | → 产出一条 `reasoning` 事件 |
 | `ToolInputDelta` | `id`, `name`, `text` | → 产出一条 `tool_call_streaming` 事件 |
 | `ToolCall` | `id`, `name`, `input` | → 内部先记录并启动工具任务；对外事件在流循环结束、完整文本事件之后产出 |
 | `StepFinish` | `finish_reason`, `usage` | → 产出一条 `usage_update` 事件（usage 不为空时） |
 
-每个事件是独立对象，不存在"同一对象同时包含多个字段"的情况。当前 Chat Completions 适配器在 provider 流结束后产出的内部顺序是：先 `ToolCall*`，再 `StepFinish`。因此工具任务可能已经在对外 `usage_update` / `message_complete` 之前启动，但 `tool_call` / `tool_result` 这两个 Agent 事件仍会等到完整文本事件之后再统一产出。
+每个事件是独立对象，不存在"同一对象同时包含多个字段"的情况。当前 Chat Completions 适配器在 provider 流结束后产出的内部顺序是：先 `ToolCall*`，再 `StepFinish`。因此工具任务可能已经在对外 `usage_update` / `assistant_message_complete` 之前启动，但 `tool_call` / `tool_result` 这两个 Agent 事件仍会等到完整文本事件之后再统一产出。
 
 ### 流式收束后的产出顺序
 
 `_stream_turn()` 的产出分两个阶段：
 
-1. **流循环内（Phase 1）**：收到 `StepFinish` 时，若 `usage` 不为空则产出 `usage_update`（在流循环内处理，始终出现在 `message_complete` 之前）
-2. **流循环结束后（Phase 2）**：按顺序产出 `reasoning_complete`（仅在有思考内容时）→ `message_complete`（仅在有文本时）→ `tool_call` 与 `tool_result` 交替产出（每个工具先 call 再 result）
+1. **流循环内（Phase 1）**：收到 `StepFinish` 时，若 `usage` 不为空则产出 `usage_update`（在流循环内处理，始终出现在 `assistant_message_complete` 之前）
+2. **流循环结束后（Phase 2）**：按顺序产出 `reasoning_complete`（仅在有思考内容时）→ `assistant_message_complete`（仅在有文本时）→ `tool_call` 与 `tool_result` 交替产出（每个工具先 call 再 result）
 
 ### 工具参数解析失败
 

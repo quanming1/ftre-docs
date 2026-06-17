@@ -195,13 +195,13 @@
 2. **跨 session 唤起**：当 `send_message` 工具触发远端 session 时，目标前端没有本地占位，echo 负责渲染用户气泡
 3. **多端同步**：其他客户端也能看到用户消息
 
-#### message — LLM 流式文本片段
+#### assistant_message — LLM 流式文本片段
 
 ```json
 {
   "type": "agent_event",
   "data": {
-    "type": "message",
+    "type": "assistant_message",
     "data": { "content": "你好，我是" }
   }
 }
@@ -216,13 +216,13 @@
 - 文本追加到 `parts[]` 末尾的流式 text part
 - 清除重试横幅（`retryState = null`，若存在）
 
-#### message_complete — LLM 一轮文本完成
+#### assistant_message_complete — LLM 一轮文本完成
 
 ```json
 {
   "type": "agent_event",
   "data": {
-    "type": "message_complete",
+    "type": "assistant_message_complete",
     "data": { "content": "你好，我是 ftre，一个 AI 编程助手。" }
   }
 }
@@ -342,7 +342,7 @@
 }
 ```
 
-与 `message_complete` 对应，封口 reasoning part。`data.data.content` 为完整思考文本。
+与 `assistant_message_complete` 对应，封口 reasoning part。`data.data.content` 为完整思考文本。
 
 #### usage_update — Token 用量更新
 
@@ -452,7 +452,7 @@
 | `usage` | object | 总 Token 用量（可选；当前运行时不填充此字段，前端不消费 done 事件的 usage，由 `usage_update` 事件单独推送） |
 
 **前端处理**：
-- `sealStreamingPart()` 封口末尾仍在 streaming 的 text/reasoning part；`message_complete` / `reasoning_complete` 负责按类型查找并封口对应流式段
+- `sealStreamingPart()` 封口末尾仍在 streaming 的 text/reasoning part；`assistant_message_complete` / `reasoning_complete` 负责按类型查找并封口对应流式段
 - 设置 `streaming = false`
 - 当前前端会将仍处于 running/pending 的 toolCalls 标记为 `"ok"`
 - 清空 `retryState`
