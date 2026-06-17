@@ -119,4 +119,18 @@
 - `compact()`：异步执行 LLM 直调摘要；所有路径均写 `context_compact(enabled=true)`（含后台 idle/usage 路径和用户输入关键路径）。`compact(enabled=False)` 分支仅作为兼容预留存在，当前无调用方传入 `False`
 - `enable_pending_compact()`：把历史上可能存在的 pending（`enabled=false`）`context_compact` 原地更新为 `enabled=true`；当前无代码写入 `enabled=false`，因此该调用总是返回 `False`，随后回退到 `compact(enabled=true)`
 
-压缩流程：从上一个已启用 compact 游标之后取全部事件 → LLM 直调生成 anchored summary → 直接写入 `enabled=true` 的 `context_compact` 事件（timestamp=now）到 DB；`SessionManager.to_openai_messages()` 遇到该事件后立即以摘要替代旧历史，后续新增事件自动成为 tail。
+### Tool → AgentEvent 注入
+
+工具可返回 `AgentEvent` 实例（不仅是 `str`），`react_runner` 检测后注入 memory 作为 user message。这使 Agent 无需等待用户即可"看到"图片等多模态内容。
+
+流程：`tool.func() → AgentEvent → ToolResult.event → react_runner: memory.add_raw(ev.to_openai_message()) → LLM 下一轮看到`
+
+### see_img 工具
+
+内置图片查看工具，支持本地绝对路径和 HTTP(S) URL。大图自动压缩（>5MB 或 >4096px 时 resize）。非图片文件返回文本内容。
+
+返回 `UserMessageEvent(content=[image_url])`，LLM 直接看到图片，前端隐藏（`metadata.hide=true`）。
+
+### Agent 事件体系
+
+事件从裸 dict 迁移为 `@dataclass` 类（11 个子类 + `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON 走线和 DB 存储。详见 [Agent 事件协议](/docs/agent-events)。

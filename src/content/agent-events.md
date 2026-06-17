@@ -18,7 +18,8 @@ AgentEvent (基类 @dataclass)
  ├─ RetryEvent             — type = "retry"
  ├─ DoneEvent              — type = "done"
  ├─ ToolCallStreamingEvent — type = "tool_call_streaming"
- └─ UsageUpdateEvent       — type = "usage_update"
+ ├─ UsageUpdateEvent       — type = "usage_update"
+ └─ UserMessageEvent       — type = "user_message"
 ```
 
 每个子类字段与下表 data 字段一一对应（如 `ToolCallEvent.tool_id` 对应 `data.id`）。
@@ -32,9 +33,10 @@ AgentEvent (基类 @dataclass)
 | `reasoning` | LLM 思考文本片段 | 支持 thinking 的模型输出 reasoning |
 | `reasoning_complete` | LLM 思考文本完成 | 流式收束 / 工具调用前 |
 | `tool_call` | 工具调用 | 解析 LLM 返回的 tool_calls 后 |
-| `tool_call_streaming` | 工具调用参数流式增量 | `ToolInputDelta` 事件到达时产出；当前来自 Chat Completions 流式接口（`LLMHandler`） |
+| `tool_call_streaming` | 工具调用参数流式增量 | `ToolInputDelta` 事件到达时产出 |
 | `tool_result` | 工具执行结果 | 工具执行完成 |
 | `usage_update` | Token 用量更新 | LLM 返回 usage 信息时 |
+| `user_message` | 工具注入的 user message | Tool 返回 AgentEvent 时（LLM 可见，前端隐藏） |
 | `retry` | LLM 重试 | 遇到可重试错误时 |
 | `error` | Agent 错误 | LLM 调用失败（不可重试/重试耗尽） |
 | `done` | 执行结束 | 正常完成 / 错误 / 取消 / 超迭代 |
@@ -389,6 +391,27 @@ _user_input 到达 AgentLoop_
     "error": "malformed JSON arguments",
     "status": "failed",
     "error_code": null
+  }
+}
+```
+
+### user_message
+
+工具返回 `AgentEvent`（非 `str`）时，`react_runner` 将此事件注入 memory 作为 user message。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
+
+典型场景：`see_img` 工具返回 `UserMessageEvent(content=[image_url])`，Agent 无需等待用户即可识别图片内容。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | `str \| list[dict]` | OpenAI 格式 user message content |
+| `metadata` | `dict` | 默认 `{"hide": True}`，前端由此跳过渲染 |
+
+```json
+{
+  "type": "user_message",
+  "data": {
+    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}],
+    "metadata": {"hide": true}
   }
 }
 ```
