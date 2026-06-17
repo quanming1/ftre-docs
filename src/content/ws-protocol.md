@@ -752,7 +752,7 @@
 
 ### context_compact — 上下文压缩
 
-`context_compact_start / done / enabled / failed` 事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）触发。后端 `to_openai_messages` 遇到 `context_compact(enabled=true)` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点；`enabled=false` 的 pending 事件会被忽略，直到 60% 水位启用。
+`context_compact_start / done / enabled / failed` 事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）触发。后端 `to_openai_messages` 遇到 `context_compact(enabled=true)` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点；`enabled=false` 的 pending 事件会被跳过（当前无代码写入 `enabled=false`，所有路径直接写入 `enabled=true`）。
 
 ### HTTP API 路由
 

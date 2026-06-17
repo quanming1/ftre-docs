@@ -116,7 +116,7 @@
 
 主要入口：
 - `should_compact()`：水位判断（async，只读 DB），由调用方传入预压缩水位或启用水位
-- `compact()`：异步执行 LLM 直调摘要；50% 后台路径写 `context_compact(enabled=false)`，手动或兜底路径写 `enabled=true`
-- `enable_pending_compact()`：把最新 pending `context_compact` 原地更新为 `enabled=true`
+- `compact()`：异步执行 LLM 直调摘要；所有路径均写 `context_compact(enabled=true)`（含后台 idle/usage 路径和用户输入关键路径）。`compact(enabled=False)` 分支仅作为兼容预留存在，当前无调用方传入 `False`
+- `enable_pending_compact()`：把历史上可能存在的 pending（`enabled=false`）`context_compact` 原地更新为 `enabled=true`；当前无代码写入 `enabled=false`，因此该调用总是返回 `False`，随后回退到 `compact(enabled=true)`
 
-压缩流程：选择 head/tail 边界 → LLM 直调生成 anchored summary → 写 `context_compact` 事件到 DB；后续达到启用水位时更新 `enabled=true`，`SessionManager.to_openai_messages()` 才使用该摘要替代旧历史。
+压缩流程：从上一个已启用 compact 游标之后取全部事件 → LLM 直调生成 anchored summary → 直接写入 `enabled=true` 的 `context_compact` 事件（timestamp=now）到 DB；`SessionManager.to_openai_messages()` 遇到该事件后立即以摘要替代旧历史，后续新增事件自动成为 tail。

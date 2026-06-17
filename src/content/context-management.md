@@ -105,13 +105,12 @@ target = budget * consolidation_ratio
 - `consolidation_ratio = 0.5`
 - `safety_buffer = 1024`
 
-### 4.2 选择 head / tail
+### 4.2 head / tail
 
 从最新已启用游标之后开始选择压缩范围：
-- 边界必须落在 `USER_INPUT` 事件上，避免切坏 `tool_call` / `tool_result` 配对。
-- head 是游标到边界之间的旧历史。
-- tail 是边界之后的最近原文，启用后仍完整参与 LLM 上下文。
-- 只有 `enabled=true` 后才影响后续上下文视图。
+- head = 游标之后全部事件（不做 `USER_INPUT` 边界选择，整段送入 LLM 摘要）。
+- tail = 压缩事件之后的后续新增事件。由于 compact 事件以 `timestamp=now` 写在事件流末尾，写入时 tail 为空；后续 `USER_INPUT` / Agent 事件追加到 compact 之后自动成为 tail。
+- `to_openai_messages` 遇到 `enabled=true` 的 compact 事件后清空旧 messages 并注入摘要，随后 tail 原文照常重建，自然形成"摘要 + 最近原文"的 LLM 视图。
 
 ### 4.3 摘要
 
@@ -141,8 +140,12 @@ if event.type == "context_compact":
     data = event["data"] or {}
     if data.get("enabled", True) is not True:
         continue
+    _flush_tool_calls()       # 收束之前累积的 tool_call
+    _take_reasoning()         # 丢弃未挂载的 reasoning
     messages = []
-    messages.append({"role": "user", "content": "[历史上下文摘要]\n" + data["summary"]})
+    summary = data.get("summary", "")
+    if summary:
+        messages.append({"role": "user", "content": "[历史上下文摘要]\n" + summary})
 ```
 
 含义：
