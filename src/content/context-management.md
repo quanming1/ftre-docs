@@ -99,6 +99,8 @@ budget = context_window - max_output - safety_buffer
 target = budget * consolidation_ratio
 ```
 
+> `consolidation_ratio` 与 `safety_buffer` 来自 `ContextConfig`（可配置），但当前 `_run_compact_llm()` 是直接 LLM 直调摘要，不以此做硬截断或 token 约束；这两个字段预留用于后续预算控制。
+
 默认：
 - `precompact_threshold = 0.5`
 - `compact_threshold = 0.6`
