@@ -2,7 +2,7 @@
 
 当前本地 `~/.ftre/plugins/` 目录下有 4 个插件。Gateway 启动时会扫描并加载该目录下所有非 `_` 开头的 `.py` 文件。
 
-> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中直接注册。自动上下文管理采用 50% 预压缩、60% 启用的双水位：`_step_compact` 只标记是否需要启用/兜底，真正的启用或压缩执行在 `_run_async()` 中。
+> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中注册为普通指令。自动上下文管理采用 `precompact_threshold`(0.5) 单阈值：idle/usage 后台路径直接 `compact(enabled=true)`，用户输入路径在 `_step_compact` 中标记 `need_compact` 后在 `_run_async()` 中执行压缩。
 
 ---
 
@@ -109,4 +109,4 @@ class HelloPlugin(Plugin):
 
 ## 通用约定
 
-这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`hello` 只注册示例 Channel，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记），真正的压缩执行在 `_run_async()` 中（由 `_step_run` fire-and-forget 派发到线程后执行）。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`hello` 只注册示例 Channel，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。

@@ -131,14 +131,16 @@
 - 前端收到 echo，检查 `messages` 中是否已有同 id → 有则跳过，避免重复渲染
 
 **并发防御**：
-- `AgentLoop._run_async()` 中通过 `is_session_running()` 检查；同一 session 已有 Agent 运行时静默丢弃新 `user_input`
+- `AgentLoop._dispatch()` 中 per-session asyncio.Lock 保证同一 session 串行处理
 - 前端 `isBusy` 状态阻止重复发送
 
 ### 4. cancel — 取消生成
 
-取消当前通过 `/cancel` 指令实现：前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)）。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。`/cancel` 的 handler 将 `ctx.meta["inbound"]` 替换为 `type="cancel"` 的 BusMessage，Pipeline 继续走到 `_step_run` 的 cancel 分支，调用 `agent.cancel_nowait()`；被取消的 Agent 自身产出 `done(success=false, reason="cancelled")` 作为最终信号。
+取消当前通过 `/cancel` 系统级指令实现：前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)），或发送 `type: "cancel"` 帧。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。
 
-> `type: "cancel"` 帧（`data: { session_id }`）在 Bus 层仍被 `AgentLoop._step_run()` 处理，`ws_channel._on_message` 会将其隐式 attach 并通过 `Channel.receive(kind="cancel")` 投递到 Bus。`websocket-client.ts` 保留了 `sendCancel()` 方法，当前 chat store 不再主动调用它（暂停按钮改用发送 `/cancel` 文本帧）；如果要恢复独立取消帧入口，可直接复用现有 `sendCancel()` 能力。
+**`cancel` 帧的处理**：`ws_channel._on_message` 收到 `type: "cancel"` 帧时，会将其转为 `content="/cancel"` 的 `user_input` 投递到 Bus（隐式 attach 当前 session），不再产生 `type="cancel"` 的 BusMessage。转换后由 `/cancel` 系统级指令处理：`_dispatch` 中 `command_manager.try_dispatch_system(data)` 在 session lock 外直接调用 `agent.cancel_nowait()` + `task.cancel()`；被取消的 Agent 在 LLM stream 的下一个 await 处抛出 `CancelledError`，产出 `done(success=false, reason="cancelled")` 作为最终信号。
+
+> `websocket-client.ts` 保留了 `sendCancel()` 方法，但 `cancel` 帧在 `ws_channel` 层已被转为 `/cancel` 文本帧处理。
 
 ---
 
@@ -308,11 +310,11 @@
 - 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`），同时更新 `name`（`d.name || tc.name`，优先使用事件中的 name）
 - **注意**：前端当前用 `!!d.error` 判断 `"ok"` / `"error"`，不读取 `d.status` 字段。后端在取消路径（`status="cancelled"` + `error=null`）和部分中断路径（`status="failed"` + `error=null`）下，前端会将 `status` 错误映射为 `"ok"`
 
-#### tool_cancel_requested / tool_cancelled / tool_timed_out
+#### tool_cancel_requested / tool_cancelled
 
-这些类型属于预留/可持久化事件（在 `AgentLoop.PERSISTENT_EVENTS` 中），但它们不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应构造函数，当前主运行路径不会产出这些事件。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这三类无 case 分支。当前也没有统一的 `tool_timed_out` 实时事件。以下字段为预留定义，当前未被实际使用：
+这两个类型属于预留/可持久化事件（在 `AgentLoop.PERSISTENT_EVENTS` 中），但它们不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应构造函数，当前主运行路径不会产出这些事件。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
-当前源码没有这些事件的数据结构定义或构造函数，因此也没有可依赖的字段 schema；取消/中断通常通过 `done(success=false, reason="cancelled")`，以及可能出现的 `tool_result(status="cancelled")` 表达。
+注意：`tool_timed_out` 不在 `PERSISTENT_EVENTS` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
 #### reasoning — LLM 思考文本片段
 
@@ -464,27 +466,31 @@
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `events` | number | 压缩前事件数 |
+| `events` | number | 被摘要覆盖的事件数 |
 | `tokens` | number | 压缩前估算 token |
-| `mode` | string | `prepare` / `force` / `manual` |
+| `silent` | bool | 是否静默（可选；仅 `silent=true` 时写入） |
 
 **context_compact_done** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `tokens_before` | number \| undefined | 压缩前的 token 数（`_get_total_tokens` 有值时写入） |
+| `tokens_before` | number | 压缩前的 token 数 |
 | `tokens_after` | number \| undefined | 启用后的估算 token；pending 事件可为空 |
 | `enabled` | bool | 压缩事件是否已启用 |
-| `events_before` | number | 压缩前事件数 |
-| `summary` | string | 压缩后的摘要 |
+| `events` | number | 被摘要覆盖的事件数 |
+| `summary` | string | 压缩后的摘要预览 |
+| `silent` | bool | 是否静默（可选；`silent=true` 时显式写入） |
 
 **context_compact_enabled** data：
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
-| `tokens_before` | number \| undefined | 启用前估算 token |
+| `enabled` | bool | 固定 `true`（启用成功） |
+| `events` | number | 被摘要覆盖的事件数 |
+| `tokens_before` | number | 启用前估算 token |
 | `tokens_after` | number \| undefined | 启用后估算 token |
 | `summary` | string | 摘要预览 |
+| `silent` | bool | 是否静默（可选；`silent=true` 时显式写入） |
 
 **context_compact_failed** data：
 
@@ -517,9 +523,13 @@
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `summary` | string | 压缩摘要内容 |
-| `tokens_before` | number \| undefined | 压缩前 token 数（`_get_total_tokens` 有值时写入） |
-| `events_before` | number | 压缩前事件数 |
 | `enabled` | bool | 是否参与后端上下文重建；缺省 `true` 兼容旧事件 |
+| `trigger_ratio` | number | 生成该压缩事件时的水位 |
+| `enable_ratio` | number | 启用水位（配置的 `compact_threshold`） |
+| `events_before` | number | 被摘要覆盖的事件数 |
+| `tokens_before` | number \| undefined | 压缩前 token 数 |
+| `tokens_after` | number \| undefined | 启用后估算 token；仅 `enabled=true` 时写入 |
+| `silent` | bool | 是否静默（可选；仅 `silent=true` 时写入） |
 
 #### external_message — 跨 session 消息注入
 
@@ -580,7 +590,7 @@
 **何时发出**：
 - 普通 Agent 执行路径的 `running`：在 `_active_agents[sid] = agent` 之后、`user_input` echo 之前（实际在 `_run_async()` 中）
 - 普通 Agent 执行路径的 `idle`：Agent 执行结束时在 `finally` 中 `pop` 之后发出（正常 / 错误 / 取消 / 超迭代都会发）
-- `/compact` 指令路径：不进入 `_run_async()`，由 `_cmd_compact()` 内部手动发送 `running` / `idle`，用于驱动前端 loading 状态
+- `/compact` 指令路径：不进入 `_run_async()`，由 `_cmd_compact()` 内部调用 `_publish_session_status_async()` 手动发送 `running` / `idle`，用于驱动前端 loading 状态
 
 **前端处理**：
 - 不入消息流、不持久化，是瞬时控制信号
@@ -770,7 +780,11 @@
 | POST | `/api/cron` | 创建 Cron 任务（返回 201） |
 | PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务（仅允许修改 `cron` / `title` / `prompt` / `disabled`） |
 | DELETE | `/api/cron/:job_id` | 删除 Cron 任务（返回 204） |
-| GET | `/api/commands` | 返回已注册的斜杠指令列表 |
+| GET | `/api/commands` | 返回已注册的斜杠指令列表（含 `system` 字段标识系统级指令） |
+| GET | `/api/mcp` | 列出所有 MCP 服务器及连接状态 |
+| POST | `/api/mcp` | 创建 MCP 服务器并立即连接（返回 201） |
+| PATCH | `/api/mcp/{name}` | 局部更新 MCP 服务器配置并增量重连 |
+| DELETE | `/api/mcp/{name}` | 删除 MCP 服务器并断开连接（返回 204） |
 
 > 桌面端 `triggerCompaction()` 当前会请求 `POST /api/sessions/:id/compact`，但后端 `routes.py` 尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 

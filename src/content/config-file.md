@@ -112,8 +112,9 @@
 |------|------|:---:|------|
 | `provider` | string | 是 | 默认 Provider 名，对应 `providers` 的 key |
 | `model` | string | 是 | 默认模型 ID。仅当 `provider` 存在且 `model` 非空时，运行时才会把该 ID 作为实际 LLM `model` 传入；若 `providers[provider].models[]` 中存在同名条目，则额外读取其 `name` / `context_window` / `max_output` / `vision` 等元数据。Provider 存在但找不到模型条目时仍会使用该 `model`，只是这些元数据为空/默认值；Provider 不存在或 model 为空时会得到空 LLM 配置 |
-| `workspace` | string | 否 | 默认工作区。创建 session 时不会自动写入该字段；Agent 执行时按 `session.workspace` → `agents.defaults.workspace` → 进程 cwd 的顺序选择工作区，`set_workspace` 工具会把当前 session 的 `workspace` 写回数据库 |
+| `workspace` | string | 否 | 默认工作区。创建 session 时不会自动写入该字段；Agent 执行时按 `session.workspace` → 进程 cwd 的顺序选择工作区（`session.get("workspace", "") or os.getcwd()`），`agents.defaults.workspace` 当前未在此链路中使用；`set_workspace` 工具会把当前 session 的 `workspace` 写回数据库 |
 | `title_generation` | object | 否 | 标题生成专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会构造 `AgentConfig.title_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，标题生成仍会使用该 model，只是展示和能力元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型，回退主 LLM |
+| `compact_generation` | object | 否 | 上下文压缩专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会构造 `AgentConfig.compact_llm`。`CompactHandler._run_compact_llm()` 执行摘要时会优先使用 `config.compact_llm`，未配置则回退到 `config.llm`。设计动机：压缩是后台高频长上下文调用，可用便宜/大窗口模型降低成本 |
 
 ### title_generation（可选）
 
@@ -123,6 +124,15 @@
 | `model` | string | 标题生成模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时仍会启用该标题模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型 |
 
 > 标题生成是高频小请求，建议指向便宜/快的模型（如 `gpt-4o-mini`），避免占用主对话的高级模型配额。
+
+### compact_generation（可选）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `provider` | string | Provider 名 |
+| `model` | string | 压缩摘要模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时仍会启用该压缩模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用压缩模型，回退主 LLM |
+
+> 上下文压缩是后台高频长上下文调用，建议指向便宜/大窗口模型以降低成本，避免占用主对话的高级模型配额。配置示例：`{"compact_generation": {"provider": "openai", "model": "gpt-4o-mini"}}`。
 
 ## providers
 
@@ -157,18 +167,17 @@
 
 ## agents.defaults.context
 
-上下文压缩配置。缺省即可启用双水位自动管理：
+上下文压缩配置。缺省即可启用单阈值自动管理（统一使用 `precompact_threshold` 0.5 作为触发水位；`compact_threshold` 0.6 当前仅作为事件元数据记录，不参与触发决策）：
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `precompactThreshold` / `precompact_threshold` | number | `0.5` | 预压缩水位；达到后后台生成 `context_compact(enabled=false)` |
-| `compactThreshold` / `compact_threshold` | number | `0.6` | 启用水位；达到后启用 pending compact，没有 pending 时同步兜底压缩 |
+| `precompactThreshold` / `precompact_threshold` | number | `0.5` | **唯一触发水位**：idle/usage 后台路径直接写入 `context_compact(enabled=true)`；用户输入路径标记 `need_compact` 后在 `_run_async()` 中同样写入 `enabled=true` |
+| `compactThreshold` / `compact_threshold` | number | `0.6` | 当前仅作为压缩事件的 `enable_ratio` 元数据记录，不参与触发决策（所有调用方显式传入 `precompact_threshold`） |
 | `threshold` | number | - | 旧字段兼容别名，等价于 `compactThreshold` |
 | `consolidationRatio` / `consolidation_ratio` | number | `0.5` | 压缩目标占可用输入预算比例 |
 | `safetyBuffer` / `safety_buffer` | number | `1024` | 给估算误差和输出预留的安全余量 |
 | `idleCompaction` / `idle_compaction` | bool | `true` | 是否在 `done` / `usage_update` 后后台准备压缩 |
 | `silent` | bool | `true` | 自动压缩事件是否对前端静默 |
-- 如果目标端点需要特殊的 provider 前缀格式，在 `agents.defaults.model` / `title_generation.model` 中完整填写该字符串；如需前端展示和能力元数据，也在 `models[].id` 中填写同一个字符串
 
 > 当前 `api_protocol` 字段虽然存在于 Provider 配置中（默认 `"openai"`），但 `_build_model_name()` 未使用它来拼接前缀。这意味着 `api_protocol` 仅作为配置记录，不影响实际模型名构造，也不会改变 `LLMConfig.api_type`。
 
@@ -200,4 +209,4 @@
 2. `PluginManager.load_all(config_data)` 扫描 `~/.ftre/plugins/` 加载插件，每个插件匹配 `plugins[]` 中同名条目的 `config` 传入
 3. AgentLoop 处理消息时调用 `load_config()` → 内部 `_build_llm_config()` 构造 LLM 配置
 
-> **注意**：步骤 3 中 `load_config()` 每次处理 **`user_input` 类型**消息时都会重新从磁盘读取 `config.json`——Pipeline 的 `_step_compact`（自动压缩水位检测）和 `_run_async`（Agent 执行）都会调用 `_load_current_config()`；`cancel` 类型消息在 `_step_run` 中直接走 `cancel_nowait()` 分支，不触发配置重读取；命中斜杠指令（如 `/compact`）的消息也不会触发配置重读取（`command_hit=True` 时 `_step_compact` 与 `_step_run` 的 elif 分支均被跳过，不调用 `_load_current_config()`）。因此修改 providers/agents 配置后无需重启 Gateway 即可生效。但步骤 2 的插件配置只在启动时注入一次，修改 `plugins[]` 需重启才能生效。
+> **注意**：步骤 3 中 `load_config()` 每次处理 **`user_input` 类型**消息时都会重新从磁盘读取 `config.json`——Pipeline 的 `_step_compact`（自动压缩水位检测）和 `_run_async`（Agent 执行）都会调用 `_load_current_config()`；系统级指令（如 `/cancel`）在 `_dispatch` 锁外直接执行，不触发配置重读取；命中普通斜杠指令（如 `/compact`）时 `_step_command` 返回 `False` 短路，`_step_compact` 与 `_step_run` 不执行，但 `/compact` 的 handler（`_cmd_compact`）内部会调用 `_load_current_config()`。因此修改 providers/agents 配置后无需重启 Gateway 即可生效。但步骤 2 的插件配置只在启动时注入一次，修改 `plugins[]` 需重启才能生效。

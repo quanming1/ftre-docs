@@ -29,14 +29,17 @@ ftre 是一个 AI 编程助手平台，由以下组件构成：
 Gateway (ftre)
   │
   ├─ EventBus（消息中枢：inbound / outbound 两个全局队列）
-  │    ├─ inbound → AgentLoop 统一消费
+  │    ├─ inbound → AgentLoop._consume() 并发派发
   │    └─ outbound → ChannelManager 统一分发
   │
   ├─ ChannelManager（常规启动 ws / subagent；CronScheduler 创建时补注册 cron 静默 Channel）
-  ├─ AgentLoop (Pipeline: command → compact → run)
-  │    ├─ _step_command → CommandManager → /cancel / /compact
-  │    ├─ _step_compact → CompactHandler → 自动压缩水位检测
-  │    └─ _step_run → ReActAgent → LLM (via OpenAI SDK / OpenAI 兼容接口)
+  ├─ AgentLoop（并发模型：_consume() create_task 派发 _dispatch()；per-session asyncio.Lock 串行）
+  │    ├─ _dispatch()
+  │    │    ├─ 系统级指令（/cancel）→ 锁外直接执行：cancel_nowait() + task.cancel()
+  │    │    └─ 普通消息 → 获取 session lock → Pipeline(command → compact → run)
+  │    │         ├─ _step_command → CommandManager.try_dispatch（普通指令如 /compact）
+  │    │         ├─ _step_compact → 检测 token 水位，标记 need_compact
+  │    │         └─ _step_run → await _run_async()（主事件循环直接 await Agent）
   ├─ CronScheduler（按 cron 表达式周期扫描 ~/.ftre/cron/）
   ├─ SessionManager (SQLite)
   └─ PluginManager (hooks + tools)

@@ -171,9 +171,9 @@ LLM **逐步输出**工具调用参数时的流式增量。
 | `error_code` | string \| null | 错误码（`react_runner` 调用 `tool_result_event()` 时未传入此参数，默认为 `null`） |
 | `metadata` | object | 预留的工具附加元数据字段；`react_runner` 当前调用 `tool_result_event()` 时未将 `ToolResult.metadata` 传入，因此即使中间件 after 钩子补充了 metadata 也不会出现在事件中，此字段通常不存在 |
 
-### tool_cancel_requested / tool_cancelled / tool_timed_out
+### tool_cancel_requested / tool_cancelled
 
-这些事件类型在 `AgentLoop.PERSISTENT_EVENTS` 中被列出（以便未来实现时能自动持久化），但不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应的事件构造函数，当前主运行路径不产出它们：
+这两个事件类型在 `AgentLoop.PERSISTENT_EVENTS` 中被列出（以便未来实现时能自动持久化），但不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应的事件构造函数，当前主运行路径不产出它们：
 
 - 取消最终通过 `done(success=false, reason="cancelled")` 表达；如果工具任务被取消/中断，可能额外产出 `tool_result(status="cancelled")`，但不应依赖每次取消都有 cancelled 状态的 `tool_result`。
 - 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。
@@ -257,7 +257,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 
 ### done
 
-**执行结束**。对已经进入 `ReActAgent.run()` / `ReActRunner` 的一次运行，正常完成、失败、取消或超迭代时都会产出此事件；`AgentLoop` 在入参为空、session 不存在、channel 不匹配、同 session 并发丢弃等早退路径不会发布 `done`。
+**执行结束**。对已经进入 `ReActAgent.run()` / `ReActRunner` 的一次运行，正常完成、失败、取消或超迭代时都会产出此事件；`AgentLoop` 在入参为空、session 不存在、channel 不匹配等早退路径不会发布 `done`。取消时 `ReActRunner._loop()` 捕获 `CancelledError` 产出 `done(success=false, reason="cancelled")`；`AgentLoop._run_async()` 中 `CancelledError` 由 `task.cancel()` 触发，也会产出同样的 `done` 事件。
 
 ```json
 {
@@ -314,7 +314,7 @@ _user_input 到达 AgentLoop_
 | 正常完成 | `"completed"` | true | 模型不再调用工具，直接输出最终回答 |
 | 超出迭代 | `"max_iterations"` | false | 达到 `max_iterations` 上限 |
 | 错误 | `"error"` | false | LLM 调用失败且不可重试/重试耗尽 |
-| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 指令，或上行 `cancel` 帧 / 其它路径触发 `agent.cancel_nowait()` |
+| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 系统级指令，或前端 `cancel` 帧被转为 `/cancel` 后触发 `agent.cancel_nowait()` + `task.cancel()`，Agent 在 LLM stream 的 await 处抛出 `CancelledError` |
 
 ---
 

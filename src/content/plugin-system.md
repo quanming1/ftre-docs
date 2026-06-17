@@ -15,7 +15,7 @@ ftre 的插件系统允许你在不修改核心代码的前提下，扩展 Agent
 - **注册 Hook** — 在 Agent 生命周期中插入自定义逻辑
 - **读取配置** — 从 `~/.ftre/config.json` 获取插件专属配置
 
-> 说明：本文描述的是插件框架能力。当前 `main.py` 创建 `PluginManager` 时未传入 `command_manager`，因此插件暂不能实际注册斜杠指令；内置指令仍在 `AgentLoop` 中注册。
+> 说明：本文描述的是插件框架能力。当前 `main.py` 将 `CommandManager` 实例传入 `PluginManager`（`command_manager=cmd`），因此插件可通过 `self.api.command_manager.register()` 注册斜杠指令；`register()` 签名支持 `system: bool = False` 参数，系统级指令在 session lock 外执行。内置指令仍在 `AgentLoop` 中注册（`/cancel` 为系统级、`/compact` 为普通级）。
 
 ---
 
@@ -86,8 +86,8 @@ class MyPlugin(Plugin):
 | `bus` | EventBus | 消息总线 |
 | `session_manager` | SessionManager | Session 和消息的持久化 |
 | `channel_manager` | ChannelManager | Channel 注册和分发 |
-| `command_manager` | object \| None | 斜杠指令注册器（可能为 `None`），插件通过 `command_manager.register()` 注册指令。源码类型标注为 `object | None`，运行时实际为 `CommandManager` 实例或 `None`。当前 `main.py` 创建了 `CommandManager` 并传入 `AgentLoop` 和 API 路由，但未传入 `PluginManager`，因此此属性运行时始终为 `None`。注意：`/compact` 指令已在 `AgentLoop._register_commands()` 中直接注册，不依赖此属性 |
-| `event_loop` | AbstractEventLoop \| None | 主 asyncio 事件循环引用；通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）。当前 `main.py` 在 `PluginManager(...)` 构造时未传入 `event_loop`，而是在 `agent_loop.start()` 后、`plugin_manager.load_all()` 前直接赋值 `plugin_manager._event_loop = agent_loop._event_loop`；因此随后加载的插件会在 `FtrePluginApi` 中拿到该事件循环实例。hook 的 `ctx.event_loop` 由 `AgentLoop._build_messages()` 单独传入，通常与 `self.api.event_loop` 指向同一个主事件循环 |
+| `command_manager` | CommandManager | 斜杠指令注册器，插件通过 `command_manager.register()` 注册指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`（`command_manager=cmd`），因此此属性运行时为 `CommandManager` 实例。`register()` 签名新增 `system: bool = False` 参数，`system=True` 注册的系统级指令在 `_dispatch` 的 session lock 外执行，适合需要立即响应的指令（如取消操作）；默认 `system=False` 的普通指令在 lock 内执行。注意：`/cancel` 已在 `AgentLoop._register_commands()` 中作为系统级指令注册（`system=True`），`/compact` 作为普通指令注册 |
+| `event_loop` | AbstractEventLoop \| None | 主 asyncio 事件循环引用；通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）。当前 `main.py` 在 `PluginManager` 构造时直接传入 `event_loop=lambda: event_loop`（闭包引用 `asyncio.get_running_loop()` 返回的事件循环），因此插件加载时即可通过 `FtrePluginApi.event_loop` 拿到主事件循环实例。**注意**：`AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时当前未传入 `event_loop`，因此 hook 的 `ctx.event_loop` 为 `None`；插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` |
 | `_hook_manager` | HookManager | 内部 hook 管理器，通常通过 `register_hook()` 使用 |
 | `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre.tools.ToolRegistry`），通常通过 `register_tool()` 使用；注意重复注册同名**插件工具**会抛出 `ValueError`，不会静默覆盖。若插件工具与内置工具同名，插件注册阶段不会报错；构建 Agent 工具表时由 `ftre-agent-core` 的 `ToolRegistry` 按名称覆盖，后注册的插件工具会覆盖同名内置工具 |
 
@@ -134,23 +134,24 @@ Channel 基类的 `__init__` 需要三个参数：
 - `name`: 显示名称
 - `bus`: EventBus 实例
 
-### 注册斜杠指令（通过 command_manager.register，当前不可用）
+### 注册斜杠指令（通过 command_manager.register）
 
-> **注意：** `FtrePluginApi` 本身不提供 `register_command()` 方法，此段标题仅表示"注册指令"这一操作。理论上插件注册斜杠指令需要直接调用 `self.api.command_manager.register()`；但当前 `main.py` 创建 `PluginManager` 时未传入 `command_manager`，因此运行时 `self.api.command_manager` 为 `None`，下面示例代码在当前版本不能直接生效。
+> `FtrePluginApi` 本身不提供 `register_command()` 方法，此段标题仅表示"注册指令"这一操作。插件注册斜杠指令需直接调用 `self.api.command_manager.register()`。当前 `main.py` 已将 `CommandManager` 传入 `PluginManager`，因此运行时 `self.api.command_manager` 为 `CommandManager` 实例，下面示例代码可正常生效。
 
 ```python
 def my_command(ctx):
     ctx.meta.update(result="处理完成")
 
-if self.api.command_manager is not None:
-    self.api.command_manager.register(
-        "/my",
-        my_command,
-        description="执行我的插件指令",
-    )
+self.api.command_manager.register(
+    "/my",
+    my_command,
+    description="执行我的插件指令",
+)
+# 或注册系统级指令（在 session lock 外执行）
+# self.api.command_manager.register("/my_system", my_handler, description="...", system=True)
 ```
 
-`command_manager.register()` 签名与 `CommandManager` 一致：`register(command, handler, *, description="", args_hint="")`。如果未来 `PluginManager` 注入了 `command_manager`，注册后指令会出现在 `GET /api/commands` 返回的列表中，并在 AgentLoop 指令 pipeline 中匹配；当前版本因该属性为 `None`，插件注册路径不会生效。
+`command_manager.register()` 签名：`register(command, handler, *, description="", args_hint="", system=False)`。`system=True` 注册的系统级指令在 `_dispatch` 的 session lock 外执行，适合需要立即响应的指令（如取消操作）；默认 `system=False` 的普通指令在 Pipeline `_step_command` 中执行，受 session lock 保护。注册后指令会出现在 `GET /api/commands` 返回的列表中（含 `system` 字段），并在 `AgentLoop._dispatch` / Pipeline 中匹配。
 
 ### register_hook(point, fn)
 
@@ -184,9 +185,9 @@ self.api.register_hook(BEFORE_MESSAGES_BUILD, my_hook)
 | `events` | list | 事件流（可修改：裁剪/注入/重排） |
 | `config` | AgentConfig | 配置副本（可改 system_prompt / model / llm 等） |
 | `inbound_data` | dict | 当前用户消息的原始 data |
-| `event_loop` | Any | 主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`） |
+| `event_loop` | Any | 主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。**注意**：当前 `AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时未传入此字段，因此 `ctx.event_loop` 为 `None`；插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` |
 
-`MessagesBuildContext` 包含上述所有字段。`ctx.event_loop` 由 `AgentLoop._build_messages()` 直接传入；当前启动顺序也会在插件加载前把 `agent_loop._event_loop` 赋给 `plugin_manager._event_loop`，因此插件的 `self.api.event_loop` 通常同样可用，并与 `ctx.event_loop` 指向同一个主事件循环。
+`MessagesBuildContext` 包含上述所有字段。**注意**：当前 `AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时未传入 `event_loop`，因此 `ctx.event_loop` 为 `None`。插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop`（该属性在 `PluginManager` 构造时已通过 `event_loop=lambda: event_loop` 注入，通常指向主事件循环）。
 
 **使用示例：**
 
@@ -280,4 +281,4 @@ class MyTool(Tool):
 - 同名插件只加载第一个，后续同名插件会被跳过
 - `Injected` 只能作为参数默认值使用（如 `x=Injected("x")`），不要写成类型注解
 - 同名插件工具之间会在 `ftre.tools.ToolRegistry.register()` 阶段抛出 `ValueError`；但插件工具与内置工具同名时，注册阶段不会报错，构建 Agent 时会由 `ftre-agent-core` 的工具注册表按名称覆盖内置工具
-- `FtrePluginApi` 不提供 `register_command()` 方法；插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="")`。当前运行时 `command_manager` 始终为 `None`（`main.py` 未将其传入 `PluginManager`），因此此调用实际不会生效。内置指令（如 `/cancel`、`/compact`）已在 `AgentLoop._register_commands()` 中直接注册，不经过插件系统
+- `FtrePluginApi` 不提供 `register_command()` 方法；插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="", system=False)`。当前运行时 `command_manager` 为 `CommandManager` 实例（`main.py` 将其传入 `PluginManager`），因此此调用可以生效。`system=True` 注册的系统级指令在 session lock 外执行，默认普通指令在 lock 内执行。内置指令（如 `/cancel` 为系统级、`/compact` 为普通级）已在 `AgentLoop._register_commands()` 中直接注册

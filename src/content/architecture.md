@@ -77,10 +77,21 @@
 
 ### Agent Loop
 
-全局单例（`AgentLoop`），消费所有 session 的消息，Pipeline 包含三个阶段：
-1. `_step_command`：对 `user_input` 类型且 `/` 开头的消息，交给 `CommandManager` 匹配；命中则 dispatch handler 并标记 `command_hit=True`（`/cancel` 替换 inbound 为 cancel 类型；`/compact` fire-and-forget 异步执行压缩）
-2. `_step_compact`：对未命中指令的 `user_input`，检测 token 水位是否达到启用水位（默认 60%），超阈值则将 `need_compact=True` 写入 pipeline data；绝不在此阶段执行压缩（本阶段运行在唯一 inbound 消费循环里，执行压缩会阻塞消费循环），真正的启用/兜底压缩执行在 `_run_async()` 中
-3. `_step_run`：按最终 inbound 类型派发——`cancel` → `cancel_nowait()`；`user_input` 且 `command_hit` 未设置 → 通过 `asyncio.ensure_future(run_in_executor)` fire-and-forget 派发 `_run` 到线程池线程，`_run` 内部通过 `asyncio.run()` 创建独立事件循环执行 `_run_async()`，驱动 `ReActAgent`；`command_hit=True` → 短路终止
+全局单例（`AgentLoop`），并发消费所有 session 的消息。
+
+**并发模型（v3 — 主循环化）：**
+
+- `_consume()` 从 inbound 队列取消息后立即 `create_task(_dispatch(data))` 派发，不同 session 并发执行
+- `_dispatch()` 对系统级指令（如 `/cancel`）在锁外立即执行；对普通消息获取 per-session `asyncio.Lock` 串行处理
+- 所有 Agent 执行在主事件循环，`Task.cancel()` 的 `CancelledError` 在 LLM stream 的下一个 `await` 处立即抛出，实现毫秒级响应
+
+**Pipeline（锁内执行的三步骤）：**
+
+1. `_step_command`：对普通指令（如 `/compact`），调用 `command_manager.try_dispatch(data)`，命中则返回 `False` 短路终止（指令文本不送入 Agent）
+2. `_step_compact`：对 `user_input` 类型消息检测 token 水位是否达到预压缩水位（默认 50%），超阈值则标记 `data["need_compact"]=True`；不执行压缩，仅标记
+3. `_step_run`：直接 `await self._run_async(inbound, need_compact)`，在主事件循环内异步执行 Agent
+
+> 系统级指令（`/cancel`）不在 Pipeline 内处理，而是在 `_dispatch()` 的锁外阶段由 `command_manager.try_dispatch_system()` 匹配并执行。
 
 ### Session Manager
 
@@ -94,14 +105,18 @@
 - `register_channel()` — 注册 Channel
 - `register_tool()` — 注册 Tool（另有 `registerTool()` camelCase 别名）
 - `register_hook()` — 注册生命周期 Hook
-- `command_manager` 属性 — 返回 `CommandManager` 实例（可能为 `None`），插件可通过 `api.command_manager.register()` 注册斜杠指令。源码类型标注为 `object | None`，运行时实际为 `CommandManager` 实例或 `None`。**注：当前 `main.py` 创建了 `CommandManager` 实例并传入 `AgentLoop`（用于 `/cancel` 和 `/compact` 等内置指令注册）和 API 路由（用于 `GET /api/commands`），但创建 `PluginManager` 时未传入 `command_manager`，因此 `FtrePluginApi.command_manager` 运行时始终为 `None`；插件中条件注册（如 `if command_manager is not None`）的指令实际上不会注册**
-- `event_loop` 属性 — 返回主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。源码 `FtrePluginApi.event_loop` 支持 callable 惰性求值或直接返回实例；当前 `main.py` 在 `agent_loop.start()` 后、`plugin_manager.load_all()` 前直接赋值 `plugin_manager._event_loop = agent_loop._event_loop`，因此随后加载的插件会在 `FtrePluginApi` 中拿到该事件循环实例。hook 的 `ctx.event_loop` 由 `AgentLoop._build_messages()` 单独传入，通常与 `self.api.event_loop` 指向同一个主事件循环
+- `command_manager` 属性 — 返回 `CommandManager` 实例，插件可通过 `api.command_manager.register()` 注册斜杠指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`，因此 `FtrePluginApi.command_manager` 运行时为 `CommandManager` 实例而非 `None`。系统级指令（如 `/cancel`，`system=True`）在锁外执行；普通指令在 Pipeline 锁内执行
+- `event_loop` 属性 — 返回主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。当前 `main.py` 通过 `event_loop=lambda: event_loop` 在 `PluginManager` 构造函数中传入事件循环，`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）
+
+> 注意：`AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时当前未传入 `event_loop` 字段，因此 hook 的 `ctx.event_loop` 为 `None`。插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` 而非 `ctx.event_loop`。
 
 ### CompactHandler（上下文压缩）
 
-上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。主要入口：
-- `should_compact()`：水位判断（async，只读 DB），由调用方传入 50% 预压缩水位或 60% 启用水位
-- `compact()`：同步执行 LLM 直调摘要，在线程中调用；50% 后台路径写 `context_compact(enabled=false)`，手动或兜底路径写 `enabled=true`
+上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。**全异步实现**，所有方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）均为 async，直接在主事件循环内 await，不再使用 `run_in_executor` 或 `run_coroutine_threadsafe`。
+
+主要入口：
+- `should_compact()`：水位判断（async，只读 DB），由调用方传入预压缩水位或启用水位
+- `compact()`：异步执行 LLM 直调摘要；50% 后台路径写 `context_compact(enabled=false)`，手动或兜底路径写 `enabled=true`
 - `enable_pending_compact()`：把最新 pending `context_compact` 原地更新为 `enabled=true`
 
 压缩流程：选择 head/tail 边界 → LLM 直调生成 anchored summary → 写 `context_compact` 事件到 DB；后续达到启用水位时更新 `enabled=true`，`SessionManager.to_openai_messages()` 才使用该摘要替代旧历史。

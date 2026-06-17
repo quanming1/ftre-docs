@@ -23,7 +23,7 @@ class BusMessage:
 | 字段 | 类型 | 谁填充 | 说明 |
 |------|------|-------|------|
 | `id` | string | 自动 | 16 位 hex UUID，创建时自动生成 |
-| `type` | string | Channel / AgentLoop / Tool | `"user_input"` / `"cancel"` / `"agent_event"` / `"global_event"` |
+| `type` | string | Channel / AgentLoop / Tool | `"user_input"` / `"agent_event"` / `"global_event"` |
 | `from_channel` | string | Channel / AgentLoop / Tool | 来源 Channel ID（`"ws"`, `"subagent"`, `"cron"` 等） |
 | `from_session` | string | Channel / AgentLoop / Tool | 来源 Session ID |
 | `to_channel` | string | Channel / AgentLoop / Tool | 目标 Channel ID；普通 `Channel.receive()` inbound 通常等于 `from_channel`，跨通道投递或全局广播时可能不同；`"*"` 表示全局广播 |
@@ -36,10 +36,11 @@ class BusMessage:
 
 | type | 产生于 | 消费于 | data 内容 |
 |------|-------|-------|----------|
-| `"user_input"` | `Channel.receive()` | `AgentLoop._consume()` | 用户消息（content, session_id, attachments） |
-| `"cancel"` | `Channel.receive(kind="cancel")` 或 `/cancel` 指令 pipeline 转换（`_step_command` → `CommandManager`） | `AgentLoop._step_run()`（由 `_consume()` 驱动的 pipeline） | `{ session_id }` |
-| `"agent_event"` | `AgentLoop._run_async()` / `CompactHandler._notify()` / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}`；其中既包括 Agent 运行事件（含 `done` 失败事件 `{"type":"done","data":{"success":false,"reason":"error"}}`），也包括 `user_input` echo、`CompactHandler` 压缩事件与 `external_message` |
+| `"user_input"` | `Channel.receive()` / `CronScheduler._tick()` | `AgentLoop._consume()` → `_dispatch()` | 用户消息（content, session_id, attachments） |
+| `"agent_event"` | `AgentLoop._run_async()` / `CompactHandler._notify()` / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}`；其中既包括 Agent 运行事件（含 `done` 失败事件），也包括 `user_input` echo、`CompactHandler` 压缩事件与 `external_message` |
 | `"global_event"` | `AgentLoop` 等 | `ChannelManager._dispatch_loop()` | 全局广播事件 `{type: "<event-type>", data: {...}}`，`to_channel` / `to_session` 固定为 `"*"` |
+
+> 注意：`type="cancel"` 的 BusMessage 已不再使用。前端发送的 `type: "cancel"` 帧在 `ws_channel._on_message` 中被转换为 `content="/cancel"` 的 `user_input`，走 `/cancel` 系统级指令路径。
 
 ### data 内容（按 type）
 
@@ -49,13 +50,6 @@ class BusMessage:
   "content": "帮我写一个函数",
   "session_id": "ws::sess_xxx",
   "attachments": [...]
-}
-```
-
-**cancel**：
-```json
-{
-  "session_id": "ws::sess_xxx"
 }
 ```
 
@@ -75,17 +69,17 @@ BusMessage 的主要构造入口：
 
 | 构造入口 | 场景 |
 |---------|------|
-| `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_input` / `cancel`；WebSocket 上行 `/cancel` 文本以 `user_input` 进入，AgentLoop 指令 pipeline 命中后将 inbound 替换为 `type="cancel"` 消息，`_step_run` 在 cancel 分支调用 `cancel_nowait()` |
+| `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_input`；所有入站消息统一走 `kind="user_input"`（前端 cancel 帧在 ws_channel 层已转为 `/cancel` user_input） |
 | `CronScheduler._tick()` | 直接构造 BusMessage（`from_channel=self.default_channel`，默认 `"cron"`）并调用 `bus.publish_inbound()` 投递 `user_input`，不经过 `Channel.receive()` |
-| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_input` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`message_complete` / `reasoning_complete` / `tool_call` / `tool_result` / `usage_update` / `error` / `done` 等会按 `PERSISTENT_EVENTS` 白名单写入 DB（`message`、`reasoning`、`tool_call_streaming` 流式增量不持久化）。但 `_run_async()` 外层 `except Exception` 兜底构造的 `done(success=false, reason="error")` 当前只 publish outbound，不写入 DB。`_step_run` 通过 `run_in_executor` fire-and-forget 派发 `_run` 到线程，`_run` 内部通过 `asyncio.run()` 创建独立事件循环执行 `_run_async()` |
-| `AgentLoop._publish_session_status()` | 构造 `global_event(session_status)` |
-| `AgentLoop._cmd_compact._emit_status()` | `/compact` 指令内部构造 `global_event(session_status)`（running / idle），直接调用 `bus.publish_outbound()`（因 dispatch 运行在主事件循环协程中，不能使用 `run_coroutine_threadsafe`） |
+| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_input` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`message_complete` / `reasoning_complete` / `tool_call` / `tool_result` / `usage_update` / `error` / `done` / `tool_cancel_requested` / `tool_cancelled` 会按 `PERSISTENT_EVENTS` 白名单写入 DB（`message`、`reasoning`、`tool_call_streaming` 流式增量不持久化）。`_run_async()` 在主事件循环内直接 await 执行，不需要 `run_in_executor` 或 `asyncio.run()` |
+| `AgentLoop._publish_session_status_async()` | 构造 `global_event(session_status)`，直接 `await bus.publish_outbound()` |
+| `AgentLoop._cmd_compact()` | `/compact` 指令内部构造 `global_event(session_status)`（running / idle），直接 `await self._publish_session_status_async()` |
 | `send_message._do_notify()` | 构造 `agent_event(external_message)` |
-| 插件（如 `context_compact`，现已迁移为核心组件 `CompactHandler`） | 可构造实时 `agent_event` 通知前端；当前 `CompactHandler` 通过 `_notify()` 构造 BusMessage 并调用 `self._await(self.bus.publish_outbound(msg), timeout=5)` 推送 `context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed` 事件（`_await` 通过 `run_coroutine_threadsafe` 桥接回主事件循环，因为 `_notify()` 运行在线程中） |
+| `CompactHandler._notify()` | 构造 `agent_event` 通知前端；当前 `_notify()` 为全异步方法，直接 `await self.bus.publish_outbound(msg)`，不需要 `run_coroutine_threadsafe` 桥接 |
 
 ## 消费
 
-- **inbound**（`type: "user_input"` / `"cancel"`）→ `AgentLoop._consume()` 消费
+- **inbound**（`type: "user_input"`）→ `AgentLoop._consume()` → `create_task(_dispatch(data))` 并发消费
 - **outbound**（`type: "agent_event"` / `"global_event"`）→ `ChannelManager._dispatch_loop()` 分发；`global_event` 在 `to_channel == "*"` 时广播给所有 Channel
 
 ## 全局广播消息（global event）
@@ -104,7 +98,7 @@ BusMessage 的主要构造入口：
 ### 分发路径
 
 ```
-AgentLoop._publish_session_status()
+AgentLoop._publish_session_status_async()
   │  BusMessage(type="global_event", from_channel="*", from_session="*",
   │             to_channel="*", to_session="*",
   │             data={type:"session_status", data:{...}})
