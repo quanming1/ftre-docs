@@ -131,7 +131,7 @@ target = budget * consolidation_ratio
 后台压缩触发频繁，避免重复压缩：
 - 同一 session 同一时间只允许一个后台 compact task 在飞（`_compact_tasks` 去重）。
 - 每次压缩从上一个 `enabled=true` 的 compact 之后全量重新摘要。
-- 每 session 一把压缩锁，避免 idle / usage / 手动压缩并发写入。
+- 并发保护由两层机制共同提供：后台 idle/usage 路径通过 `_compact_tasks` 去重（`asyncio.create_task` 派发，运行在 session lock 之外）；手动 `/compact` 在 Pipeline session lock 内执行。CompactHandler 自身不持有锁。
 
 ---
 

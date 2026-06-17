@@ -112,7 +112,7 @@
 
 ### CompactHandler（上下文压缩）
 
-上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。**对外入口是全异步实现**，主要方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）都在主事件循环内 await；但工具线程使用的 `WorkspaceAccessor` 仍会通过 `run_coroutine_threadsafe` 读写 session 的 `workspace`。
+上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。**对外入口是全异步实现**，主要方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）都在主事件循环内 await，不需要 `run_coroutine_threadsafe` 桥接。（注：工具线程使用的 `WorkspaceAccessor` 仍会通过 `run_coroutine_threadsafe` 读写 session 的 `workspace`，但这与 CompactHandler 无关。）
 
 主要入口：
 - `should_compact()`：水位判断（async，只读 DB），默认会看 `compact_threshold`，但当前所有调用方都显式传入 `precompact_threshold`（默认 0.5）
