@@ -241,7 +241,7 @@ LLM 调用遇到**可重试错误**（网络/超时/限流等），准备重试�
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
 | `code` | string | 错误码 |
-| `assistant_message` | string | 错误描述 |
+| `message` | string | 错误描述 |
 | `attempt` | int | 当前重试次数（从 1 开始） |
 | `max_attempts` | int | 最大重试次数（不含首次尝试） |
 
@@ -261,7 +261,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
-| `assistant_message` | string | 错误描述 |
+| `message` | string | 错误描述 |
 | `code` | string | 错误码 |
 
 常见错误码：
