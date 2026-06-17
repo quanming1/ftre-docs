@@ -35,6 +35,9 @@ export const docs: DocEntry[] = [
   // 配置
   { path: 'config-file', title: 'config.json 配置', category: '配置' },
   { path: 'mcp', title: 'MCP 服务器', category: '配置' },
+
+  // Skill
+  { path: 'skill', title: 'Skill 体系', category: 'Skill' },
 ]
 
 // 导出 loader map 给 DocPage 使用
