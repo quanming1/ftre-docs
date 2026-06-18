@@ -81,7 +81,7 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
 - **标题栏 🔌 按钮**：弹出 `McpPopover`，可查看服务器状态、快速启/禁用，并跳转到设置页
 - **全局设置对话框的 MCP section**：`SettingsDialog` 已支持 `section: "mcp"`，并渲染 `McpSettings`
 
-> 注意：旧的 `SettingsPanel` 首页当前只内置了 `agents / models / gateway` 三个入口；MCP 不在这个首页列表里，但并不影响通过标题栏或 `ftre:open-settings` 事件直接进入 MCP 设置。
+> 注意：旧的 `SettingsPanel` 首页当前只内置了 `agents / models / gateway` 三个入口；MCP 不在这个首页列表里，但并不影响通过标题栏或 `ftre:open-settings` 事件直接进入 MCP 设置。`settings-events.ts` 里的 `SettingsSection` 联合类型也已包含 `"mcp"`。
 
 `McpSettings` 提供完整管理：
 

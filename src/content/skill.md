@@ -7,7 +7,7 @@ Skill 是 ftre 的可复用能力模块——把工作流程、领域知识、�
 | 特性 | 说明 |
 |------|------|
 | 存储位置 | `~/.ftre/skills/` |
-| 文件格式 | `skill-name.md` 或 `skill-name/SKILL.md` |
+| 文件格式 | `skill-name.md`、`skill-name/SKILL.md` 或 `skill-name/skill.md` |
 | 加载方式 | 用户点名 → Agent 调 `loadSkill` 读取，或 Agent 自动匹配 |
 | 作用域 | 当前对话 session，不跨 session 污染 |
 
@@ -26,7 +26,7 @@ Skill 是 ftre 的可复用能力模块——把工作流程、领域知识、�
 ```
 
 - 单文件：`~/.ftre/skills/<name>.md`
-- 目录形式：`~/.ftre/skills/<name>/SKILL.md`，可附带 `references/` 子目录存放扩展文档
+- 目录形式：`~/.ftre/skills/<name>/SKILL.md`（或 `<name>/skill.md`），可附带 `references/` 子目录存放扩展文档
 
 ## 触发机制
 

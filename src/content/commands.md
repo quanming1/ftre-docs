@@ -27,7 +27,7 @@ if not await cmd.try_dispatch(data): return       # 锁内，普通级
 | `/cancel` | 系统级（`system=True`） | 无 | 取消当前 session 正在执行的 Agent。handler 直接调用 `agent.cancel_nowait()` 和 `task.cancel()`，被取消的 Agent（或 task）产出 `done(success=false, reason="cancelled")` 作为最终信号 | `AgentLoop._register_commands()` |
 | `/compact` | 普通级 | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 async 方式直接 await 执行压缩：先 emit `session_status("running")`，再 `await compact_handler.enable_pending_compact()`，没有 pending 则 `await compact_handler.compact(enabled=True, silent=False)`，最后 emit `session_status("idle")`。命中后 `_step_command` 返回 `False` 短路终止 Pipeline，指令文本不送入 Agent | `AgentLoop._register_commands()` |
 
-> `/help` 等指令当前未注册。如需扩展，可在 `AgentLoop._register_commands()` 中追加普通级指令，或通过插件 `self.api.command_manager.register()` 注册（当前 `command_manager` 已注入 `PluginManager`，插件注册的指令会在 `GET /api/commands` 返回的列表中出现，并在 `_step_command` 中匹配）。未匹配任何注册指令的 `/` 开头输入会作为普通 `user_input` 送入 Agent。
+> `/help` 等指令当前未注册。如需扩展，可在 `AgentLoop._register_commands()` 中追加普通级指令，或通过插件 `self.api.command_manager.register()` 注册（当前 `command_manager` 已注入 `PluginManager`，插件注册的指令会在 `GET /api/commands` 返回的列表中出现，并在 `_step_command` 中匹配）。未匹配任何注册指令的 `/` 开头输入会作为普通 `user_message` 送入 Agent。
 
 ---
 
@@ -55,12 +55,12 @@ async def _dispatch(self, data: dict) -> None:
 ```text
 _dispatch() → 获取 session lock → Pipeline.run(data)
                 │
-                ├─ _step_command: 检查 inbound 是否为 user_input 且文本以 / 开头
+                ├─ _step_command: 检查 inbound 是否为 user_message 且文本以 / 开头
                 │    ├─ 匹配到已注册指令 → dispatch handler → 返回 False（短路终止）
                 │    └─ 未匹配已注册指令 → 返回 True（继续 pipeline）
                 │
-                ├─ _step_compact: 对 user_input 检测 token 水位
-                │    ├─ 非 user_input → 返回 True（跳过）
+                ├─ _step_compact: 对 user_message 检测 token 水位
+                │    ├─ 非 user_message → 返回 True（跳过）
                 │    └─ 检测水位，超阈值标记 need_compact=True → 返回 True
                 │
                 └─ _step_run: await _run_async(inbound, need_compact) → 返回 False（终止）
@@ -68,7 +68,7 @@ _dispatch() → 获取 session lock → Pipeline.run(data)
 
 **关键设计**：`_step_command` 返回 `True`（继续）或 `False`（命中指令则短路终止）。`_step_compact` 始终返回 `True`（只标记，不短路）。`_step_run` 返回 `False`（执行完毕终止 Pipeline）。
 
-> 普通指令拦截发生在 Pipeline 内，**不经过 `before_messages_build` hook**——指令检查在 `_step_command`（Pipeline 第一步），先于 `_step_compact` 和 `_step_run`，而 `before_messages_build` hook 在 `_run_async()` 内部的 `_build_messages()` 中触发，只有未被指令拦截的 `user_input` 才会走到 hook。
+> 普通指令拦截发生在 Pipeline 内，**不经过 `before_messages_build` hook**——指令检查在 `_step_command`（Pipeline 第一步），先于 `_step_compact` 和 `_step_run`，而 `before_messages_build` hook 在 `_run_async()` 内部的 `_build_messages()` 中触发，只有未被指令拦截的 `user_message` 才会走到 hook。
 
 ### CommandManager
 
@@ -132,8 +132,8 @@ self.command_manager.register(
 )
 ```
 
-1. 前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（或发送 `type: "cancel"` 帧，ws_channel 会将其转换为 `/cancel` 的 user_input）
-2. `ws_channel` 投递 BusMessage(type="user_input") 到 Bus
+1. 前端发送 `type: "user_message"`、`content: "/cancel"` 的帧（或发送 `type: "cancel"` 帧，ws_channel 会将其转换为 `/cancel` 的 user_message）
+2. `ws_channel` 投递 BusMessage(type="user_message") 到 Bus
 3. `AgentLoop._consume()` → `create_task(_dispatch(data))`
 4. `_dispatch()`：`try_dispatch_system()` 匹配到 `/cancel` → 执行 `_on_cancel` → 直接调用 `agent.cancel_nowait()` 和 `task.cancel()` → 返回 `True`，短路退出
 5. 被取消的 Agent 或 task 产出 `done(success=false, reason="cancelled")`
@@ -142,8 +142,8 @@ self.command_manager.register(
 
 ### /compact 的完整流程
 
-1. 前端发送 `type: "user_input"`、`content: "/compact"` 的帧
-2. `ws_channel` 投递 BusMessage(type="user_input") 到 Bus
+1. 前端发送 `type: "user_message"`、`content: "/compact"` 的帧
+2. `ws_channel` 投递 BusMessage(type="user_message") 到 Bus
 3. `AgentLoop._consume()` → `create_task(_dispatch(data))`
 4. `_dispatch()`：`try_dispatch_system()` 不命中 → 获取 session lock → `pipeline.run(data)`
 5. `_step_command`：检测到 `/compact`，`try_dispatch()` 匹配 → 执行 `_cmd_compact` handler → handler async 直接 await 压缩 → 返回命中 → `_step_command` 返回 `False`（短路终止 Pipeline）

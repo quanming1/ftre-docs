@@ -8,7 +8,7 @@
 
 ## 连接模型
 
-一条物理 WebSocket 可以关注多个 session（多 tab / 多会话同步），通过 `attach`/`detach` 帧声明。`user_input` / `cancel` 帧会**隐式 attach**当前 session，保持向后兼容。
+一条物理 WebSocket 可以关注多个 session（多 tab / 多会话同步），通过 `attach`/`detach` 帧声明。`user_message` / `cancel` 帧会**隐式 attach**当前 session，保持向后兼容。
 
 后端维护两个索引：
 
@@ -34,7 +34,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 建议 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端当前不强制校验。缺失时帧仍会被处理；仅 `user_input` / `cancel` 等进入 Bus 的帧会写入 `metadata.frame_id`，`attach` / `detach` 不回显该字段，因此无法用于服务端确认；后端 BusMessage 默认用 uuid4 hex 前 16 位 |
+| `id` | string | 建议 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端当前不强制校验。缺失时帧仍会被处理；仅 `user_message` / `cancel` 等进入 Bus 的帧会写入 `metadata.frame_id`，`attach` / `detach` 不回显该字段，因此无法用于服务端确认；后端 BusMessage 默认用 uuid4 hex 前 16 位 |
 | `type` | string | 是 | 帧类型，决定路由行为 |
 | `data` | object | 否 | 载荷，结构因 type 而异；后端对缺失 data 有容错（默认 `{}`） |
 | `metadata` | object | 否 | 附加元数据，进入后端 `BusMessage.metadata`；当前不参与 LLM 配置或消息构建，主要用于透传 `frame_id` 等控制信息 |
@@ -81,12 +81,12 @@
 - 前端关闭 tab
 - 切换到不同的 session 且不再关心旧 session
 
-### 3. user_input — 用户消息
+### 3. user_message — 用户消息
 
 ```json
 {
   "id": "abc123def456",
-  "type": "user_input",
+  "type": "user_message",
   "data": {
     "content": "帮我写一个函数",
     "session_id": "ws::sess_xxx",
@@ -122,12 +122,12 @@
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
 2. 隐式 attach 当前 session
 3. `frame.id` 写入 `metadata.frame_id`
-4. `data` + `metadata` → `Channel.receive(..., kind="user_input")` → Bus inbound → AgentLoop
+4. `data` + `metadata` → `Channel.receive(..., kind="user_message")` → Bus inbound → AgentLoop
 
 **id 与 frame_id 的用途**：
 - 前端发送时生成 `id`，同时本地 push 一条乐观占位消息（`userMsg.id = frame.id`）
 - 后端 `_on_message` 把 `frame.id` 写入 `metadata.frame_id`
-- AgentLoop echo `user_input` 时把 `metadata.frame_id` 回填到下行帧
+- AgentLoop echo `user_message` 时把 `metadata.frame_id` 回填到下行帧
 - 前端收到 echo，检查 `messages` 中是否已有同 id → 有则跳过，避免重复渲染
 
 **并发防御**：
@@ -136,11 +136,11 @@
 
 ### 4. cancel — 取消生成
 
-取消当前通过 `/cancel` 系统级指令实现：前端发送 `type: "user_input"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)），或发送 `type: "cancel"` 帧。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。
+取消当前通过 `/cancel` 系统级指令实现：前端发送 `type: "user_message"`、`content: "/cancel"` 的帧（参见[指令系统](/docs/commands)），或发送 `type: "cancel"` 帧。桌面前端的暂停按钮和 `/cancel` 指令候选都走这条路径。
 
-**`cancel` 帧的处理**：`ws_channel._on_message` 收到 `type: "cancel"` 帧时，会将其转为 `content="/cancel"` 的 `user_input` 投递到 Bus（隐式 attach 当前 session），不再产生 `type="cancel"` 的 BusMessage。转换后由 `/cancel` 系统级指令处理：`_dispatch` 中 `command_manager.try_dispatch_system(data)` 在 session lock 外直接调用 `agent.cancel_nowait()` + `task.cancel()`；被取消的 Agent 在 LLM stream 的下一个 await 处抛出 `CancelledError`，产出 `done(success=false, reason="cancelled")` 作为最终信号。
+**`cancel` 帧的处理**：`ws_channel._on_message` 收到 `type: "cancel"` 帧时，会将其转为 `content="/cancel"` 的 `user_message` 投递到 Bus（隐式 attach 当前 session），不再产生 `type="cancel"` 的 BusMessage。转换后由 `/cancel` 系统级指令处理：`_dispatch` 中 `command_manager.try_dispatch_system(data)` 在 session lock 外直接调用 `agent.cancel_nowait()` + `task.cancel()`；被取消的 Agent 在 LLM stream 的下一个 await 处抛出 `CancelledError`，产出 `done(success=false, reason="cancelled")` 作为最终信号。
 
-> `websocket-client.ts` 保留了 `sendCancel()` 方法，但 `cancel` 帧在 `ws_channel` 层已被转为 `/cancel` 文本帧处理。
+> `websocket-client.ts` 的 `sendCancel()` 方法已改为直接发送 `type: "user_message"` + `content: "/cancel"` 的帧（不再发送 `type: "cancel"` 帧）。`ws_channel` 层仍保留对 `type: "cancel"` 帧的兼容处理（转为 `/cancel` user_message），但前端已不再使用这种帧类型。
 
 ---
 
@@ -170,13 +170,13 @@
 
 ### 事件类型完整列表
 
-#### user_input — 用户消息 echo
+#### user_message — 用户消息 echo
 
 ```json
 {
   "type": "agent_event",
   "data": {
-    "type": "user_input",
+    "type": "user_message",
     "data": {
       "content": "帮我写一个函数",
       "session_id": "ws::sess_xxx"
@@ -551,7 +551,7 @@
 - 插入一条 `external = true` 的 assistant 消息，附带 `externalFrom = "${from_channel}::${from_session}"` 标识来源，以及 `parts` 渲染文本段
 - 如果当前有 streaming tail，插入到 tail 之前（避免视觉错位）
 
-**来源**：仅 `send_message(kind="notify")` 会产生并持久化 `external_message`。`send_message(kind="invoke")` 不产生该事件，而是向目标 session 投递普通 `user_input`；来源信息会写入 `content` 前缀，并按普通 `user_input` echo 渲染。
+**来源**：仅 `send_message(kind="notify")` 会产生并持久化 `external_message`。`send_message(kind="invoke")` 不产生该事件，而是向目标 session 投递普通 `user_message`；来源信息会写入 `content` 前缀，并按普通 `user_message` echo 渲染。
 
 ---
 
@@ -588,7 +588,7 @@
 | `status` | string | `"running"`（Agent 或命令开始执行）/ `"idle"`（执行结束） |
 
 **何时发出**：
-- 普通 Agent 执行路径的 `running`：在 `_active_agents[sid] = agent` 之后、`user_input` echo 之前（实际在 `_run_async()` 中）
+- 普通 Agent 执行路径的 `running`：在 `_active_agents[sid] = agent` 之后、`user_message` echo 之前（实际在 `_run_async()` 中）
 - 普通 Agent 执行路径的 `idle`：Agent 执行结束时在 `finally` 中 `pop` 之后发出（正常 / 错误 / 取消 / 超迭代都会发）
 - `/compact` 指令路径：不进入 `_run_async()`，由 `_cmd_compact()` 内部调用 `_publish_session_status_async()` 手动发送 `running` / `idle`，用于驱动前端 loading 状态
 
@@ -610,7 +610,7 @@
 
 ```json
 {
-  "type": "user_input",
+  "type": "user_message",
   "data": {
     "content": "看下这张图",
     "session_id": "ws::sess_xxx",
@@ -704,7 +704,7 @@
 ```json
 {
   "content": [
-    { "type": "text", "data": "帮我提交代码" },
+    { "type": "text", "text": "帮我提交代码" },
     { "type": "skill", "data": "octo-im-github" }
   ]
 }
@@ -712,10 +712,10 @@
 
 支持的类型：
 
-| type | data 类型 | 说明 |
-|------|-----------|------|
-| `"text"` | string | 纯文本内容 |
-| `"skill"` | string | 用户选中的 Skill 名称 |
+| type | 文本字段 | 说明 |
+|------|----------|------|
+| `"text"` | `text: string` | 纯文本内容（前端发送时使用 `text` 字段；后端 `_text_value` 兼容读取 `text` 优先、`data` 兜底） |
+| `"skill"` | `data: string` | 用户选中的 Skill 名称 |
 | `"code_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略（前端仅作为本地引用 UI 展示） |
 | `"archive_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略（前端仅作为本地引用 UI 展示） |
 | `"email"` | object | 前端类型中保留的邮件消息段；当前后端 `_content_to_text` 会忽略 |
@@ -734,7 +734,7 @@
 
 ### user_message — 历史回放用户消息
 
-`user_message` 出现在 HTTP API `GET /api/sessions/:id/messages` 返回的历史记录中。真实用户输入写入为 `metadata.hide=false`，工具注入给 LLM 的隐藏 user message 写入为 `metadata.hide=true`。实时 WebSocket echo 仍使用小写 `user_input`，用于本轮输入去重和跨 session 展示。
+`user_message` 出现在 HTTP API `GET /api/sessions/:id/messages` 返回的历史记录中。真实用户输入写入为 `metadata.hide=false`，工具注入给 LLM 的隐藏 user message 写入为 `metadata.hide=true`。实时 WebSocket echo 仍使用 `user_message`，用于本轮输入去重和跨 session 展示。
 
 ### external_message 的 LLM 转换
 

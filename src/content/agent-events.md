@@ -303,7 +303,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 ## 事件产出时序
 
 ```
-_user_input 到达 AgentLoop_
+_user_message 到达 AgentLoop_
   │
   ├─ _loop() 开始
   │   │

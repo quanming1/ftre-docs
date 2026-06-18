@@ -86,9 +86,11 @@
 | `events_before` | number | 被摘要覆盖的事件数 |
 | `tokens_before` | number | 压缩前估算 token |
 | `tokens_after` | number \| undefined | 启用后 `summary + tail` 的估算 token；仅 `enabled=true` 时写入 |
-| `silent` | bool | 前端是否静默（可选；仅 `silent=true` 时写入） |
+| `silent` | bool \| undefined | 是否静默；仅 `silent=true` 时写入（自动压缩），手动 `/compact` 不写入此字段 |
 
-`timestamp` 为压缩触发时间（不使用 epsilon 修正），写入 DB 时由 `save_message(timestamp=now)` 指定。
+> `silent` 既出现在通知事件（`context_compact_start / done / enabled / failed`）的 `data` 中，也写入持久化的 `context_compact` 游标事件（仅 `silent=true` 时）。前端在历史回放时据此跳过自动压缩事件的渲染。
+
+`timestamp` 为压缩触发时间（不使用 epsilon 修正），写入 DB 时由 `save_message(timestamp=now)` 指定；`context_compact` 事件作为普通历史事件追加在事件流末尾，后续新增事件自然成为它的 tail。
 
 ---
 
@@ -112,13 +114,14 @@ target = budget * consolidation_ratio
 ### 4.2 head / tail
 
 从最新已启用游标之后开始选择压缩范围：
-- head = 游标之后全部事件（不做 `user_message` 边界选择，整段送入 LLM 摘要）。
+- head = **上一个 `enabled=true` 的 compact 事件之后的全部事件**（不做 `user_message` 边界选择，整段送入 LLM 摘要）。实现上 `get_cursor_index(events)` 返回的是“上一个已启用 compact 的下一位”，因此旧的 compact 事件本身不会再次进入新的 head。
 - tail = 压缩事件之后的后续新增事件。由于 compact 事件以 `timestamp=now` 写在事件流末尾，写入时 tail 为空；后续 `user_message` / Agent 事件追加到 compact 之后自动成为 tail。
 - `to_openai_messages` 遇到 `enabled=true` 的 compact 事件后清空旧 messages 并注入摘要，随后 tail 原文照常重建，自然形成"摘要 + 最近原文"的 LLM 视图。
 
 ### 4.3 摘要
 
-使用默认 LLM 直调：
+LLM 直调：
+- 优先使用 `compact_llm`（通过 `config.json` 的 `compact_generation` 配置），未配置则回退到主 LLM。
 - 不派 subagent。
 - 不给工具权限。
 - 把 head 事件格式化为文本，一次 chat completion 生成 anchored summary。
@@ -129,9 +132,11 @@ target = budget * consolidation_ratio
 ### 4.4 去重
 
 后台压缩触发频繁，避免重复压缩：
-- 同一 session 同一时间只允许一个后台 compact task 在飞（`_compact_tasks` 去重）。
 - 每次压缩从上一个 `enabled=true` 的 compact 之后全量重新摘要。
-- 并发保护由两层机制共同提供：后台 idle/usage 路径通过 `_compact_tasks` 去重（`asyncio.create_task` 派发，运行在 session lock 之外）；手动 `/compact` 在 Pipeline session lock 内执行。CompactHandler 自身不持有锁。
+- 后台 idle/usage 路径通过 `_compact_tasks` 去重（`asyncio.create_task` 派发，运行在 session lock 之外），同一 session 同一时间最多只有一个后台 compact task 在飞。
+- 用户输入关键路径与手动 `/compact` 都在 Pipeline session lock 内执行，与同一 session 的其他 lock 内操作互斥。
+- CompactHandler 自身不持有锁；session lock 由 AgentLoop 提供。
+- 注意：`_compact_tasks` 仅对后台 idle/usage 路径去重，不覆盖 idle 与用户输入路径之间的并发。后台 compact task 运行在 session lock 之外，理论上可能与 lock 内的用户输入 compact 并行（实际中后台任务通常很快完成，冲突概率极低）。
 
 ---
 
@@ -146,8 +151,8 @@ if event.type == "context_compact":
         continue
     _flush_tool_calls()       # 收束之前累积的 tool_call
     _take_reasoning()         # 丢弃未挂载的 reasoning
-    messages = []
     summary = data.get("summary", "")
+    messages = []
     if summary:
         messages.append({"role": "user", "content": "[历史上下文摘要]\n" + summary})
 ```
@@ -206,7 +211,7 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 | `tokens_before` | number | 压缩前估算 token |
 | `tokens_after` | number \| null | 启用后估算 token |
 | `summary` | string | 摘要预览 |
-| `silent` | bool | 是否静默 |
+| `silent` | bool | 是否静默（可选；当前代码在 `silent=true` 时显式写入） |
 
 ### context_compact_enabled
 
@@ -224,6 +229,11 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 ### context_compact_failed
 
 压缩失败时发送，包含 `reason`。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `reason` | string | 失败原因 |
+| `silent` | bool | 是否静默（可选；当前代码在 `silent=true` 时显式写入） |
 
 ---
 

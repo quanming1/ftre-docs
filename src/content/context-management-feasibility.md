@@ -10,9 +10,9 @@
 
 **把上下文压缩从"三级摘要器 + 双阈值 + 升级机制"简化为"一种 LLM 直调 + 一个水位 + silent/非 silent"**。
 
-具体目标：
+具体目标（历史方案，不是当前代码状态）：
 - ✅ 只保留 LLM 直调作为唯一摘要方式（砍 subagent、砍 raw）
-- ✅ 只保留一个阈值（砍 preemptive_threshold 和关键路径 0.8）
+- ✅ 逻辑上只保留一个实际触发水位（但当前代码层面仍保留两个配置字段：`precompact_threshold` / `compact_threshold`）
 - ✅ 自动压缩 `silent=true`（前端不渲染），手动 `/compact` `silent=false`（前端渲染气泡）
 - ✅ 暂不考虑 LLM 失败兜底，失败了下次再触发再试
 - ✅ 游标机制、L1 prune、摘要并入（anchored）保留不变
@@ -24,13 +24,13 @@
 | 维度 | 现状 | 目标 | 变化 |
 |------|------|------|------|
 | 摘要方式 | raw / llm / subagent 三级 | **只有 llm** | 删 2 种 |
-| 触发水位 | preemptive_threshold=0.6 + 关键路径 0.8 | **一个 threshold=0.6** | 合 2 → 1 |
+| 触发水位 | 历史上曾是多阈值设计 | **目标是一个实际触发水位**（当前落地代码仍保留 `precompact_threshold=0.5` 与 `compact_threshold=0.6` 两个配置字段，但调用路径统一显式传 `precompact_threshold`） | 逻辑收敛 |
 | 关键路径兜底 | raw 毫秒级兜底 | **无兜底** | 删 |
 | raw→llm 升级 | 有 `should_upgrade_raw` | **无升级** | 删 |
 | /compact | 用 subagent | **用 llm** | 改参数 |
 | mode 字段 | "raw"/"llm"/"subagent" | **删掉** | 删 |
 | silent | 有 | **有，不变** | 不变 |
-| 游标机制 | timestamp epsilon | **不变** | 不变 |
+| 游标机制 | 按事件流里的 `context_compact` 游标事件重建视图 | **不变** | 不变 |
 | L1 prune | 有 | **不变** | 不变 |
 | 摘要并入 | anchored | **不变** | 不变 |
 | 前端 mode | 不存在 | **不存在** | 不变 |
@@ -100,16 +100,19 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 ## 3. 简化后的流程
 
 ```
-一轮对话结束 → done(idle)
-                    └─ 检查水位 ≥ threshold(0.6)
-                        ├─ 是 → LLM 直调摘要 → 写 context_compact(silent=true) → 游标前进
+一轮对话结束 → done / usage_update
+                    └─ 检查水位 ≥ precompact_threshold(0.5)
+                        ├─ 是 → LLM 直调摘要 → 写 context_compact(enabled=true, silent=true)
                         └─ 否 → 不压
 
-用户发下一轮 → 水位检查
-    ├─ 后台已压好，水位 < threshold → 正常回复，零延迟
-    └─ 没压好（水位仍 ≥ threshold） → LLM 直调摘要(silent=true) → 再压一次 → 正常回复
+用户发下一轮 → _step_compact 水位检查
+    ├─ 水位 < precompact_threshold → 正常回复
+    └─ 水位 ≥ precompact_threshold
+         └─ _run_async 先尝试 enable_pending_compact()
+              ├─ 命中历史 pending → 启用为 enabled=true 后正常回复
+              └─ 无 pending（当前常态） → LLM 直调摘要(enabled=true, silent=true) → 正常回复
 
-用户手动 /compact → LLM 直调摘要(silent=false) → 前端渲染气泡
+用户手动 /compact → 先尝试 enable_pending_compact()，无 pending 则 LLM 直调摘要(enabled=true, silent=false)
 ```
 
 ---

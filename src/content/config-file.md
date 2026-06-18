@@ -176,7 +176,7 @@
 | `threshold` | number | - | 旧字段兼容别名，等价于 `compactThreshold` |
 | `consolidationRatio` / `consolidation_ratio` | number | `0.5` | 压缩目标占可用输入预算比例 |
 | `safetyBuffer` / `safety_buffer` | number | `1024` | 给估算误差和输出预留的安全余量 |
-| `idleCompaction` / `idle_compaction` | bool | `true` | 是否在 `done` / `usage_update` 后后台准备压缩 |
+| `idleCompaction` / `idle_compaction` | bool | `true` | 是否在 `done` / `usage_update` 后后台触发压缩检查；命中时直接执行 `compact(enabled=true, silent=config.context.silent)` |
 | `silent` | bool | `true` | 自动压缩事件是否对前端静默 |
 
 > 当前 `api_protocol` 字段虽然存在于 Provider 配置中（默认 `"openai"`），但 `_build_model_name()` 未使用它来拼接前缀。这意味着 `api_protocol` 仅作为配置记录，不影响实际模型名构造，也不会改变 `LLMConfig.api_type`。
@@ -209,4 +209,4 @@
 2. `PluginManager.load_all(config_data)` 扫描 `~/.ftre/plugins/` 加载插件，每个插件匹配 `plugins[]` 中同名条目的 `config` 传入
 3. AgentLoop 处理消息时调用 `load_config()` → 内部 `_build_llm_config()` 构造 LLM 配置
 
-> **注意**：步骤 3 中 `load_config()` 每次处理 **`user_input` 类型**消息时都会重新从磁盘读取 `config.json`——Pipeline 的 `_step_compact`（自动压缩水位检测）和 `_run_async`（Agent 执行）都会调用 `_load_current_config()`；系统级指令（如 `/cancel`）在 `_dispatch` 锁外直接执行，不触发配置重读取；命中普通斜杠指令（如 `/compact`）时 `_step_command` 返回 `False` 短路，`_step_compact` 与 `_step_run` 不执行，但 `/compact` 的 handler（`_cmd_compact`）内部会调用 `_load_current_config()`。因此修改 providers/agents 配置后无需重启 Gateway 即可生效。但步骤 2 的插件配置只在启动时注入一次，修改 `plugins[]` 需重启才能生效。
+> **注意**：步骤 3 中 `load_config()` 每次处理 **`user_message` 类型**消息时都会被调用——Pipeline 的 `_step_compact`（自动压缩水位检测）和 `_run_async`（Agent 执行）都会调用 `_load_current_config()`；系统级指令（如 `/cancel`）在 `_dispatch` 锁外直接执行，不触发配置重读取；命中普通斜杠指令（如 `/compact`）时 `_step_command` 返回 `False` 短路，`_step_compact` 与 `_step_run` 不执行，但 `/compact` 的 handler（`_cmd_compact`）内部会调用 `_load_current_config()`。`load_config()` 内部使用 mtime 缓存：每次调用都会检查 `config.json` 的修改时间，仅在文件变更时才重新解析内容，未变更时直接返回缓存。因此修改 providers/agents 配置后无需重启 Gateway 即可生效。但步骤 2 的插件配置只在启动时注入一次，修改 `plugins[]` 需重启才能生效。
