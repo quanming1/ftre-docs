@@ -315,7 +315,7 @@ _user_message 到达 AgentLoop_
   │   │   ├─ usage_update              (StepFinish.usage，如有)
   │   │   ├─ reasoning_complete          (如有思考内容)
   │   │   ├─ assistant_message_complete     (如有文本)
-  │   │   ├─ tool_call → tool_result   (交替，每个 tool 一对)
+  │   │   ├─ tool_call × N → tool_result × N   (先全部 call，再全部 result)
   │   │
   │   ├─ _stream_turn() 第 2 轮（直接回复）
   │   │   ├─ LLM stream
@@ -364,7 +364,101 @@ _user_message 到达 AgentLoop_
 `_stream_turn()` 的产出分两个阶段：
 
 1. **流循环内（Phase 1）**：收到 `StepFinish` 时，若 `usage` 不为空则产出 `usage_update`（在流循环内处理，始终出现在 `assistant_message_complete` 之前）
-2. **流循环结束后（Phase 2）**：按顺序产出 `reasoning_complete`（仅在有思考内容时）→ `assistant_message_complete`（仅在有文本时）→ `tool_call` 与 `tool_result` 交替产出（每个工具先 call 再 result）
+2. **流循环结束后（Phase 2）**：按顺序产出 `reasoning_complete`（仅在有思考内容时）→ `assistant_message_complete`（仅在有文本时）→ 所有 `tool_call`（逐条产出）→ 所有 `tool_result`（逐条产出，与 tool_call 不交替）→ `UserMessageEvent`（如有）
+
+## 事件转 OpenAI messages
+
+后端在构造下一轮 LLM 输入时，会通过 `SessionManager.to_openai_messages()` 把持久化 Agent 事件重建为 OpenAI Chat Completions 兼容的 `messages`。重建时不会直接一条事件对应一条 message，而是按事件顺序合并同一轮 assistant 的 reasoning、可见文本和 tool calls。
+
+### 普通回答：`reasoning_complete → assistant_message_complete`
+
+没有工具调用时，reasoning 会合并进 `assistant.content` 的第一个 text part，`reasoning_content` 固定写空字符串。
+
+```json
+[
+  {
+    "role": "assistant",
+    "content": [
+      {"type": "text", "text": "思考过程"},
+      {"type": "text", "text": "最终回答"}
+    ],
+    "reasoning_content": ""
+  }
+]
+```
+
+### 直接工具调用：`reasoning_complete → tool_call → tool_result`
+
+如果模型没有输出可见文本就直接调用工具，assistant message 保留真实 `reasoning_content`，`content` 规范为空字符串。工具结果仍然单独转成 `role="tool"`。
+
+```json
+[
+  {
+    "role": "assistant",
+    "content": "",
+    "reasoning_content": "需要调用 bash 查看目录",
+    "tool_calls": [
+      {
+        "id": "c1",
+        "type": "function",
+        "function": {
+          "name": "bash",
+          "arguments": "{\"command\": \"pwd\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "c1",
+    "content": "E:\\ftre"
+  }
+]
+```
+
+### 先输出可见文本再工具调用：`reasoning_complete → assistant_message_complete → tool_call → tool_result`
+
+如果同一轮模型先输出可见文本，再发起工具调用，`assistant_message_complete` 不会立即落成一条普通 assistant message，而是先暂存；随后出现的 `tool_call` 会把它合并进同一条 assistant message。此时可见文本放在 `content`，真实 reasoning 保留在 `reasoning_content`。
+
+```json
+[
+  {
+    "role": "assistant",
+    "content": [
+      {"type": "text", "text": "我先检查当前目录。"}
+    ],
+    "reasoning_content": "我需要先说明，再调用 bash 查看目录",
+    "tool_calls": [
+      {
+        "id": "c1",
+        "type": "function",
+        "function": {
+          "name": "bash",
+          "arguments": "{\"command\": \"pwd\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "c1",
+    "content": "E:\\ftre"
+  }
+]
+```
+
+### 只有可见文本：`assistant_message_complete`
+
+如果没有 reasoning，也没有 tool call，则只生成普通 assistant message，不额外添加 `reasoning_content`。
+
+```json
+[
+  {
+    "role": "assistant",
+    "content": "最终回答"
+  }
+]
+```
 
 ### 工具参数解析失败
 
