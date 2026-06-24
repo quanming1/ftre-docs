@@ -55,7 +55,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
     if (!scrollContainer) return
 
     const handleScroll = () => {
-      const containerTop = scrollContainer.getBoundingClientRect().top + 80 // header offset
+      const containerTop = scrollContainer.getBoundingClientRect().top + 64 // header offset
       let currentId = toc[0].id
       for (const item of toc) {
         const h = document.getElementById(item.id)
@@ -83,8 +83,8 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   if (content === null) {
     return (
       <div className="flex min-h-[320px] items-center justify-center">
-        <div className="flex items-center gap-3 rounded-full border border-border-subtle bg-surface px-4 py-2 text-[13px] text-t-muted shadow-sm">
-          <span className="h-4 w-4 rounded-full border-2 border-border border-t-neon animate-spin" />
+        <div className="flex items-center gap-3 rounded-full border border-black/[0.06] bg-white px-4 py-2 text-[13px] text-black/40 shadow-sm">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/[0.08] border-t-black" />
           Loading document
         </div>
       </div>
@@ -115,7 +115,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
       <article className="min-w-0 max-w-[688px] w-full">
         <div className="mb-7">
 
-          <h2 className="text-[32px] font-semibold leading-tight text-t-primary sm:text-[40px]">{doc.title}</h2>
+          <h2 className="text-[32px] font-semibold leading-tight text-black sm:text-[40px]">{doc.title}</h2>
         </div>
 
         <div className="prose-docs">
@@ -130,7 +130,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
           </ReactMarkdown>
         </div>
 
-        <footer className="mt-12 grid gap-3 border-t border-border-subtle pt-6 sm:grid-cols-2">
+        <footer className="mt-12 grid gap-3 border-t border-black/[0.06] pt-6 sm:grid-cols-2">
           {prev ? <DocLink doc={prev} direction="prev" /> : <div />}
           {next && <DocLink doc={next} direction="next" />}
         </footer>
@@ -152,10 +152,10 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
             <button
               key={item.id}
               onClick={() => onItemClick(item.id)}
-              className={`block w-full truncate py-0.5 text-left text-[13px] leading-5 transition-colors hover:text-neon ${
+              className={`block w-full truncate py-0.5 text-left text-[13px] leading-5 transition-colors hover:text-black ${
                 activeId === item.id
-                  ? 'text-neon font-semibold'
-                  : 'text-t-muted'
+                  ? 'text-black font-semibold'
+                  : 'text-black/40'
               } ${item.level === 3 ? 'pl-4' : ''}`}
             >
               {item.text}
@@ -192,16 +192,16 @@ function DocLink({ doc, direction }: { doc: DocEntry; direction: 'prev' | 'next'
   return (
     <Link
       to={`/docs/${doc.path}`}
-      className={`group flex items-center gap-3 rounded-md border border-border-subtle bg-surface px-4 py-3 text-t-secondary shadow-sm transition-colors hover:border-border hover:text-t-primary ${
+      className={`group flex items-center gap-3 rounded-md border border-black/[0.06] bg-white px-4 py-3 text-black/70 shadow-sm transition-colors hover:border-black/[0.12] hover:text-black ${
         isNext ? 'justify-end text-right sm:col-start-2' : ''
       }`}
     >
-      {!isNext && <ArrowLeft size={16} strokeWidth={1.8} className="shrink-0 text-t-ghost group-hover:text-neon" />}
+      {!isNext && <ArrowLeft size={16} strokeWidth={1.8} className="shrink-0 text-black/30 group-hover:text-black" />}
       <span className="min-w-0">
-        <span className="block text-[11px] text-t-ghost">{isNext ? 'Next' : 'Previous'}</span>
+        <span className="block text-[11px] text-black/30">{isNext ? 'Next' : 'Previous'}</span>
         <span className="block truncate text-[14px] font-medium">{doc.title}</span>
       </span>
-      {isNext && <ArrowRight size={16} strokeWidth={1.8} className="shrink-0 text-t-ghost group-hover:text-neon" />}
+      {isNext && <ArrowRight size={16} strokeWidth={1.8} className="shrink-0 text-black/30 group-hover:text-black" />}
     </Link>
   )
 }

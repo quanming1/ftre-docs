@@ -3,28 +3,28 @@
 @tailwind utilities;
 
 :root {
-  --ftre-bg-base: #f0f0f1;
+  --ftre-bg-base: #ffffff;
   --ftre-bg-surface: #ffffff;
   --ftre-bg-elevated: #f6f7f9;
   --ftre-bg-panel: #eef0f3;
   --ftre-bg-hover: rgba(0, 0, 0, 0.04);
-  --ftre-bg-active-doc: #e7e7e8;
-  --ftre-border-default: #dcdcde;
-  --ftre-border-subtle: #e8e8ea;
-  --ftre-text-primary: #111111;
-  --ftre-text-secondary: #333333;
-  --ftre-text-muted: #555555;
-  --ftre-text-dim: #777777;
-  --ftre-text-ghost: #999999;
-  --ftre-accent-default: #059669;
-  --ftre-accent-hover: #047857;
+  --ftre-bg-active-doc: rgba(0, 0, 0, 0.06);
+  --ftre-border-default: rgba(0, 0, 0, 0.12);
+  --ftre-border-subtle: rgba(0, 0, 0, 0.06);
+  --ftre-text-primary: #000000;
+  --ftre-text-secondary: rgba(0, 0, 0, 0.8);
+  --ftre-text-muted: rgba(0, 0, 0, 0.55);
+  --ftre-text-dim: rgba(0, 0, 0, 0.4);
+  --ftre-text-ghost: rgba(0, 0, 0, 0.3);
+  --ftre-accent-default: #000000;
+  --ftre-accent-hover: rgba(0, 0, 0, 0.7);
   --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
 }
 
 html {
-  background: var(--ftre-bg-base);
-  color: var(--ftre-text-primary);
+  background: #ffffff;
+  color: #000000;
   font-family: var(--font-sans);
   scroll-behavior: smooth;
 }
@@ -154,7 +154,7 @@ body {
   color: var(--ftre-text-primary);
   font-weight: 650;
   line-height: 1.25;
-  scroll-margin-top: 108px;
+  scroll-margin-top: 80px;
 }
 
 .prose-docs h1 {
@@ -277,8 +277,8 @@ body {
 
 .prose-docs blockquote {
   margin: 22px 0;
-  border-left: 3px solid rgba(5, 150, 105, 0.45);
-  background: rgba(255, 255, 255, 0.55);
+  border-left: 3px solid rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.02);
   color: var(--ftre-text-muted);
   padding: 12px 16px;
 }
@@ -311,6 +311,6 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(5, 150, 105, 0.42);
+  background: rgba(0, 0, 0, 0.3);
   background-clip: content-box;
 }

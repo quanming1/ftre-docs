@@ -3,25 +3,40 @@ import { Link } from 'react-router-dom'
 export default function SiteHeader({ onHero = false }: { onHero?: boolean }) {
   return (
     <header
-      className={`relative z-30 flex h-20 w-full items-center ${
-        onHero ? 'bg-transparent' : 'border-b border-border-subtle bg-white'
+      className={`fixed top-0 left-0 z-50 flex h-16 w-full items-center transition-colors ${
+        onHero
+          ? 'bg-white/80 backdrop-blur-xl'
+          : 'border-b border-black/[0.06] bg-white/80 backdrop-blur-xl'
       }`}
     >
-      <div className="mx-auto flex w-full max-w-[1720px] items-center justify-between px-8 sm:px-12 lg:px-16">
-        <Link to="/" className="group flex items-center">
-          <span className="digital-wordmark">
-            Ftre
+      <div className="mx-auto flex w-full max-w-[1200px] items-center justify-between px-6">
+        <Link to="/" className="group flex items-center gap-2">
+          <span className="text-[17px] font-semibold tracking-[-0.02em] text-black">
+            ftre
           </span>
         </Link>
 
-        <nav className="hidden items-center gap-10 text-[15px] font-medium text-[#101114] md:flex">
-          <Link to="/docs/overview">文档</Link>
-          <Link to="/#preview">产品</Link>
-          <Link to="/docs/plugin-system">插件</Link>
-          <Link to="/docs/skill-overview">Skill</Link>
+        <nav className="hidden items-center gap-8 text-[15px] font-medium md:flex">
+          <Link to="/docs/overview" className="text-black/50 transition-colors hover:text-black">文档</Link>
+          <Link to="/#features" className="text-black/50 transition-colors hover:text-black">功能</Link>
+          <Link to="/docs/plugin-system" className="text-black/50 transition-colors hover:text-black">插件</Link>
+          <Link to="/docs/skill" className="text-black/50 transition-colors hover:text-black">Skill</Link>
         </nav>
 
-        <div className="h-11 w-[156px]" aria-hidden="true" />
+        <div className="flex items-center gap-3">
+          <a
+            href="https://github.com/quanming1/ftre"
+            className="hidden items-center gap-2 rounded-full bg-black/[0.04] px-4 py-2 text-[13px] font-medium text-black/70 transition-colors hover:bg-black/[0.08] hover:text-black sm:flex"
+          >
+            GitHub
+          </a>
+          <Link
+            to="/docs/quickstart"
+            className="rounded-full bg-black px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-85"
+          >
+            开始使用
+          </Link>
+        </div>
       </div>
     </header>
   )
