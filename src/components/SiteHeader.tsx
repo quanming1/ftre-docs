@@ -1,16 +1,11 @@
+import { Github, ArrowRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 export default function SiteHeader({ onHero = false }: { onHero?: boolean }) {
   return (
-    <header
-      className={`fixed top-0 left-0 z-50 flex h-16 w-full items-center transition-colors ${
-        onHero
-          ? 'bg-white/80 backdrop-blur-xl'
-          : 'border-b border-black/[0.06] bg-white/80 backdrop-blur-xl'
-      }`}
-    >
+    <header className="flex h-16 w-full items-center bg-white">
       <div className="mx-auto flex w-full max-w-[1200px] items-center justify-between px-6">
-        <Link to="/" className="group flex items-center gap-2">
+        <Link to="/" className="flex items-center gap-2">
           <span className="text-[17px] font-semibold tracking-[-0.02em] text-black">
             ftre
           </span>
@@ -18,7 +13,7 @@ export default function SiteHeader({ onHero = false }: { onHero?: boolean }) {
 
         <nav className="hidden items-center gap-8 text-[15px] font-medium md:flex">
           <Link to="/docs/overview" className="text-black/50 transition-colors hover:text-black">文档</Link>
-          <Link to="/#features" className="text-black/50 transition-colors hover:text-black">功能</Link>
+          <a href="#features" className="text-black/50 transition-colors hover:text-black">功能</a>
           <Link to="/docs/plugin-system" className="text-black/50 transition-colors hover:text-black">插件</Link>
           <Link to="/docs/skill" className="text-black/50 transition-colors hover:text-black">Skill</Link>
         </nav>

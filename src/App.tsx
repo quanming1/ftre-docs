@@ -21,7 +21,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white text-black lg:h-screen lg:overflow-hidden">
       <SiteHeader />
-      <div className="pt-16 lg:flex lg:h-[calc(100vh-64px)] lg:overflow-hidden">
+      <div className="lg:flex lg:h-[calc(100vh-64px)] lg:overflow-hidden">
         <Sidebar />
         <main id="ftre-docs-main" className="min-w-0 flex-1 bg-white lg:overflow-y-auto">
           <div className="mx-auto w-full max-w-[1100px] px-5 py-6 sm:px-8 lg:px-10 lg:py-7">

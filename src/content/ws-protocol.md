@@ -497,6 +497,7 @@
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `reason` | string | 失败原因描述 |
+| `silent` | bool | 是否静默（可选；当前代码在 `silent=true` 时显式写入） |
 
 **前端处理**：
 - `context_compact_start`：push 一条 `compact.status = "running"` 的 system 消息，同时写入 `tokensBefore`（来自 `data.tokens`，若存在）
@@ -716,9 +717,7 @@
 |------|----------|------|
 | `"text"` | `text: string` | 纯文本内容（前端发送时使用 `text` 字段；后端 `_text_value` 兼容读取 `text` 优先、`data` 兜底） |
 | `"skill"` | `data: string` | 用户选中的 Skill 名称 |
-| `"code_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略（前端仅作为本地引用 UI 展示） |
-| `"archive_ref"` | object | 前端可能发送；当前后端 `_content_to_text` 会忽略（前端仅作为本地引用 UI 展示） |
-| `"email"` | object | 前端类型中保留的邮件消息段；当前后端 `_content_to_text` 会忽略 |
+| `"email"` | object | 前端 `MessagePart` 类型中保留的邮件消息段（`EmailPartData`）；当前后端 `_content_to_text` 会忽略 |
 | `"image"` | object | 前端本地渲染用图片段；上送给后端时实际拆到 `attachments` 字段，当前后端 `_content_to_text` 不处理此 part |
 
 当前后端 `_content_to_text` 实际只处理 `text` 和 `skill`，其它 part 会被忽略；图片输入由 `attachments` 字段处理。
@@ -781,6 +780,9 @@
 | PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务（仅允许修改 `cron` / `title` / `prompt` / `disabled`） |
 | DELETE | `/api/cron/:job_id` | 删除 Cron 任务（返回 204） |
 | GET | `/api/commands` | 返回已注册的斜杠指令列表（含 `system` 字段标识系统级指令） |
+| GET | `/api/traces` | 列出最近的 Agent trace 摘要（支持 limit/offset 分页） |
+| GET | `/api/traces/{trace_id}` | 获取单个 trace 的轻量 Run 树 |
+| GET | `/api/traces/{trace_id}/runs/{run_id}` | 获取单个 Run 的完整输入/输出/事件 |
 | GET | `/api/mcp` | 列出所有 MCP 服务器及连接状态 |
 | POST | `/api/mcp` | 创建 MCP 服务器并立即连接（返回 201） |
 | PATCH | `/api/mcp/{name}` | 局部更新 MCP 服务器配置并增量重连 |

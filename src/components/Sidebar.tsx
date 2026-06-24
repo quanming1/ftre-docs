@@ -12,7 +12,7 @@ export default function Sidebar() {
   }, {})
 
   return (
-    <aside className="sticky top-16 z-20 flex max-h-[calc(100vh-64px)] min-w-[220px] max-w-[420px] shrink-0 resize-x flex-col overflow-auto border-b border-black/[0.06] bg-white px-3 py-4 lg:h-[calc(100vh-64px)] lg:w-[292px] lg:border-b-0 lg:border-r">
+    <aside className="sticky top-0 z-20 flex max-h-[calc(100vh-64px)] min-w-[220px] max-w-[420px] shrink-0 resize-x flex-col overflow-auto border-b border-black/[0.06] bg-white px-3 py-4 lg:h-[calc(100vh-64px)] lg:w-[292px] lg:border-b-0 lg:border-r">
       <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-3 pr-1">
         {Object.entries(groups).map(([category, items]) => (
           <section key={category}>

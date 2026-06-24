@@ -45,8 +45,8 @@
 ### 2.1 idle / usage 后台路径
 
 触发源：
-- 每轮 `done` 后的 idle 检查。
-- LLM stream 产生 `usage_update` 后的实时水位检查。
+- 每轮 `done` 后的 idle 检查（subagent channel 除外）。
+- LLM stream 产生 `usage_update` 后的实时水位检查（subagent channel 除外）。
 
 行为：
 - `should_compact(threshold=precompact_threshold=0.5)` 检查水位。
@@ -85,7 +85,7 @@
 | `enable_ratio` | number | 启用水位（配置的 `compact_threshold`） |
 | `events_before` | number | 被摘要覆盖的事件数 |
 | `tokens_before` | number | 压缩前估算 token |
-| `tokens_after` | number \| undefined | 启用后 `summary + tail` 的估算 token；仅 `enabled=true` 时写入 |
+| `tokens_after` | number \| undefined | 启用后估算 token；仅 `enabled=true` 时写入。`compact()` 写入时 compact 事件在末尾、无 tail，因此仅估算 summary 本身；`enable_pending_compact()` 启用历史 pending 时才包含 tail 事件（当前无代码写入 `enabled=false`，此路径实际不触发） |
 | `silent` | bool \| undefined | 是否静默；仅 `silent=true` 时写入（自动压缩），手动 `/compact` 不写入此字段 |
 
 > `silent` 既出现在通知事件（`context_compact_start / done / enabled / failed`）的 `data` 中，也写入持久化的 `context_compact` 游标事件（仅 `silent=true` 时）。前端在历史回放时据此跳过自动压缩事件的渲染。
@@ -134,6 +134,7 @@ LLM 直调：
 后台压缩触发频繁，避免重复压缩：
 - 每次压缩从上一个 `enabled=true` 的 compact 之后全量重新摘要。
 - 后台 idle/usage 路径通过 `_compact_tasks` 去重（`asyncio.create_task` 派发，运行在 session lock 之外），同一 session 同一时间最多只有一个后台 compact task 在飞。
+- 后台路径还有冷却机制（`_compact_retry_after`）：当后台压缩因不可重试 LLM 错误（`auth_error` / `bad_request` / `content_filter`）失败时，该 session 进入 300 秒冷却期，期间跳过后台压缩调度；冷却仅作用于后台 idle/usage 路径，不影响用户输入路径和手动 `/compact`。
 - 用户输入关键路径与手动 `/compact` 都在 Pipeline session lock 内执行，与同一 session 的其他 lock 内操作互斥。
 - CompactHandler 自身不持有锁；session lock 由 AgentLoop 提供。
 - 注意：`_compact_tasks` 仅对后台 idle/usage 路径去重，不覆盖 idle 与用户输入路径之间的并发。后台 compact task 运行在 session lock 之外，理论上可能与 lock 内的用户输入 compact 并行（实际中后台任务通常很快完成，冲突概率极低）。
@@ -145,7 +146,7 @@ LLM 直调：
 `SessionManager.to_openai_messages()` 处理 `context_compact`：
 
 ```python
-if event.type == "context_compact":
+elif _t == "context_compact":
     data = event["data"] or {}
     if data.get("enabled", True) is not True:
         continue
@@ -154,7 +155,7 @@ if event.type == "context_compact":
     summary = data.get("summary", "")
     messages = []
     if summary:
-        messages.append({"role": "user", "content": "[历史上下文摘要]\n" + summary})
+        messages.append({"role": "user", "content": f"[历史上下文摘要]\n{summary}"})
 ```
 
 含义：
@@ -168,10 +169,12 @@ if event.type == "context_compact":
 
 | 时机 | 水位 | 行为 | silent |
 |------|------|------|--------|
-| `usage_update` 实时监测 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件 | `true` |
-| 每轮 `done` 后 idle 检查 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件 | `true` |
+| `usage_update` 实时监测 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发 | `true` |
+| 每轮 `done` 后 idle 检查 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发；冷却期内跳过 | `true` |
 | 用户下一轮输入前 | `>= 0.5`（`precompact_threshold`） | 标记 `need_compact=True`；实际在 `_run_async` 中先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True)` | `true` |
 | 用户手动 `/compact` | 无需水位 | 先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True, silent=False)` | `false` |
+
+> 后台 idle/usage 路径受冷却机制（`_compact_retry_after`）保护：遇到不可重试 LLM 错误（`auth_error` / `bad_request` / `content_filter`）后进入 300 秒冷却期，期间跳过后台压缩。用户输入路径和手动 `/compact` 不受冷却限制。
 
 ---
 
@@ -221,8 +224,8 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 |------|------|------|
 | `enabled` | bool | 固定 `true`（启用成功） |
 | `events` | number | 被摘要覆盖的事件数 |
-| `tokens_before` | number | 启用前估算 token |
-| `tokens_after` | number \| null | 启用后估算 token |
+| `tokens_before` | number | 压缩创建时估算 token（取自 pending 事件的 `tokens_before` 字段，非启用时实时值） |
+| `tokens_after` | number \| null | 启用后估算 token（`summary + tail`） |
 | `summary` | string | 摘要预览 |
 | `silent` | bool | 是否静默（可选；`silent=true` 时显式写入） |
 

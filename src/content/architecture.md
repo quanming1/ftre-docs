@@ -138,7 +138,7 @@ def build_default_tools(..., llm_config=None):
 
 ### see_img 工具
 
-内置图片查看工具，支持本地绝对路径和 HTTP(S) URL。大图自动压缩（>5MB 或 >4096px resize），统一转 JPEG。仅在 `llm_config.vision=True` 时注册。
+内置图片查看工具，支持本地绝对路径和 HTTP(S) URL。大图自动压缩（文件 >5MB 时触发：先按 >4096px resize 缩放，再按 JPEG 质量压缩），统一转 JPEG。仅在 `llm_config.vision=True` 时注册。
 
 返回 `UserMessageEvent(content=[image_url])`，LLM 直接看到图片，前端隐藏（`metadata.hide=true`）。
 

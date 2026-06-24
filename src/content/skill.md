@@ -114,7 +114,7 @@ Agent 可在 SKILL.md 中引用 `references/` 下的文档路径。
 | 流程分步清晰 | 用编号列表，每步包含工具调用和检查点 |
 | 示例真实可用 | 贴用户可能的提问和预期响应 |
 | 避免过长 | 单文件 500 行以内，超过拆分到 references/ |
-| YAML frontmatter | 不支持，直接用 Markdown 标题 |
+| YAML frontmatter | 可选；`POST /api/skills` 创建时模板会自动生成 frontmatter（`name` + `description`），`extract_description()` 会优先从 frontmatter 读取描述；手写时也可以不用 frontmatter，直接用 Markdown 标题 |
 
 ## 系统提示词注入
 
