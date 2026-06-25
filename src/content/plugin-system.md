@@ -89,13 +89,13 @@ class MyPlugin(Plugin):
 | `command_manager` | CommandManager | 斜杠指令注册器，插件通过 `command_manager.register()` 注册指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`（`command_manager=cmd`），因此此属性运行时为 `CommandManager` 实例。`register()` 签名新增 `system: bool = False` 参数，`system=True` 注册的系统级指令在 `_dispatch` 的 session lock 外执行，适合需要立即响应的指令（如取消操作）；默认 `system=False` 的普通指令在 lock 内执行。注意：`/cancel` 已在 `AgentLoop._register_commands()` 中作为系统级指令注册（`system=True`），`/compact` 作为普通指令注册 |
 | `event_loop` | AbstractEventLoop \| None | 主 asyncio 事件循环引用；通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）。当前 `main.py` 在 `PluginManager` 构造时直接传入 `event_loop=lambda: event_loop`（闭包引用 `asyncio.get_running_loop()` 返回的事件循环），因此插件加载时即可通过 `FtrePluginApi.event_loop` 拿到主事件循环实例。**注意**：`AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时当前未传入 `event_loop`，因此 hook 的 `ctx.event_loop` 为 `None`；插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` |
 | `_hook_manager` | HookManager | 内部 hook 管理器，通常通过 `register_hook()` 使用 |
-| `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre.tools.ToolRegistry`），通常通过 `register_tool()` 使用；注意重复注册同名**插件工具**会抛出 `ValueError`，不会静默覆盖。若插件工具与内置工具同名，插件注册阶段不会报错；构建 Agent 工具表时由 `ftre-agent-core` 的 `ToolRegistry` 按名称覆盖，后注册的插件工具会覆盖同名内置工具 |
+| `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre.tools.ToolRegistry`），通常通过 `self.api.tool_registry.register(tool)` 使用；注意重复注册同名**插件工具**会抛出 `ValueError`，不会静默覆盖。若插件工具与内置工具同名，插件注册阶段不会报错；构建 Agent 工具表时由 `ftre-agent-core` 的 `ToolRegistry` 按名称覆盖，后注册的插件工具会覆盖同名内置工具 |
 
-`FtrePluginApi` 还提供 `registerTool(tool)` 作为 `register_tool(tool)` 的 camelCase 别名。
+`FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre.tools.ToolRegistry` 实例。
 
-### register_tool(tool)
+### 注册 Tool（通过 tool_registry.register）
 
-注册一个 Tool 到 Agent 的默认工具集：
+插件通过 `self.api.tool_registry.register(tool)` 注册 Tool 到 Agent 的默认工具集：
 
 ```python
 from ftre_agent_core.tool import Tool, ToolParameter
@@ -108,7 +108,7 @@ tool = Tool(
     ],
     func=lambda input: f"处理结果: {input}",
 )
-self.api.register_tool(tool)
+self.api.tool_registry.register(tool)
 ```
 
 ### register_channel(channel)
@@ -281,4 +281,4 @@ class MyTool(Tool):
 - 同名插件只加载第一个，后续同名插件会被跳过
 - `Injected` 只能作为参数默认值使用（如 `x=Injected("x")`），不要写成类型注解
 - 同名插件工具之间会在 `ftre.tools.ToolRegistry.register()` 阶段抛出 `ValueError`；但插件工具与内置工具同名时，注册阶段不会报错，构建 Agent 时会由 `ftre-agent-core` 的工具注册表按名称覆盖内置工具
-- `FtrePluginApi` 不提供 `register_command()` 方法；插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="", system=False)`。当前运行时 `command_manager` 为 `CommandManager` 实例（`main.py` 将其传入 `PluginManager`），因此此调用可以生效。`system=True` 注册的系统级指令在 session lock 外执行，默认普通指令在 lock 内执行。内置指令（如 `/cancel` 为系统级、`/compact` 为普通级）已在 `AgentLoop._register_commands()` 中直接注册
+- `FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre.tools.ToolRegistry` 实例。插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="", system=False)`。当前运行时 `command_manager` 为 `CommandManager` 实例（`main.py` 将其传入 `PluginManager`），因此此调用可以生效。`system=True` 注册的系统级指令在 session lock 外执行，默认普通指令在 lock 内执行。内置指令（如 `/cancel` 为系统级、`/compact` 为普通级）已在 `AgentLoop._register_commands()` 中直接注册

@@ -15,7 +15,7 @@ ftre 是一个 AI 编程助手平台，由以下组件构成：
 | 路径 | 说明 |
 |------|------|
 | `~/.ftre/config.json` | LLM Provider、Model、默认 Workspace、可选标题生成模型与压缩模型等配置；`agents.defaults.title_generation` / `compact_generation` 会分别解析为 `AgentConfig.title_llm` / `compact_llm`；`agents.defaults.workspace` 会写入 `AgentConfig.workspace`，但实际运行时工作区优先级仍以 session 自身 `workspace` 字段为准；Gateway 监听端口当前不从此文件读取 |
-| `~/.ftre/plugins/` | 插件目录（Python），如 `skill_plugin.py`、`context_govern.py` |
+| `~/.ftre/plugins/` | 外部插件目录（Python），用于扩展；内置插件（`skill`、`mcp`、`context_govern`、`title_gen`）随代码仓库发布在 `src/ftre/plugin/builtin/`，Gateway 先加载内置插件再扫描此目录 |
 | `~/.ftre/skills/` | Skill 目录（Markdown），可复用能力说明 |
 | `~/.ftre/cron/` | 定时任务目录（JSON），每个任务一个 `job_xxx.json` 文件 |
 | `~/.ftre/sessions.db` | Session 和消息持久化（SQLite） |

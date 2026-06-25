@@ -103,7 +103,7 @@
 
 从 `~/.ftre/plugins/` 加载 Python 插件，提供（通过 `FtrePluginApi`）：
 - `register_channel()` — 注册 Channel
-- `register_tool()` — 注册 Tool（另有 `registerTool()` camelCase 别名）
+- `tool_registry` 属性 — 返回 `ToolRegistry` 实例，插件通过 `self.api.tool_registry.register(tool)` 注册 Tool
 - `register_hook()` — 注册生命周期 Hook
 - `command_manager` 属性 — 返回 `CommandManager` 实例，插件可通过 `api.command_manager.register()` 注册斜杠指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`，因此 `FtrePluginApi.command_manager` 运行时为 `CommandManager` 实例而非 `None`。系统级指令（如 `/cancel`，`system=True`）在锁外执行；普通指令在 Pipeline 锁内执行
 - `event_loop` 属性 — 返回主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。当前 `main.py` 通过 `event_loop=lambda: event_loop` 在 `PluginManager` 构造函数中传入事件循环，`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）

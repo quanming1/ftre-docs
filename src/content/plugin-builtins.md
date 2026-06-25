@@ -1,6 +1,6 @@
-# 本地插件
+# 内置插件
 
-当前本地 `~/.ftre/plugins/` 目录下有 4 个插件。Gateway 启动时会扫描并加载该目录下所有非 `_` 开头的 `.py` 文件。
+ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`。Gateway 启动时 `PluginManager.load_all()` 先加载内置插件，再扫描 `~/.ftre/plugins/` 外部目录。
 
 > **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中注册为普通指令。自动上下文管理采用 `precompact_threshold`(0.5) 单阈值：idle/usage 后台路径直接 `compact(enabled=true)`，用户输入路径在 `_step_compact` 中标记 `need_compact` 后在 `_run_async()` 中执行压缩。
 
@@ -63,50 +63,26 @@
 
 ---
 
-## 4. hello — 示例插件
+## 4. mcp — MCP 服务器管理
 
-演示 Plugin 体系的基础能力——注册一个自定义 Channel。不做实际通信，启动时打印日志、收到 outbound 消息时打印日志。
-
-文件名：`hello_plugin.py`
+将 MCP 模块封装为内置插件，负责 MCP 连接生命周期、工具注册、系统提示词注入和 HTTP CRUD 路由。
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
-| `greeting` | `Hello, ftre Plugin System!` | 启动时打印的问候语 |
+| （无插件专属配置） | — | MCP 配置在 `config.json` 顶层 `mcp` 段，不在 `plugins[]` 数组里 |
 
-```python
-import logging
-from ftre.plugin import Plugin
-from ftre.channel import Channel
-from ftre.bus import BusMessage
+**工作原理：**
 
-logger = logging.getLogger(__name__)
+- `setup()` 时创建 `McpManager` 实例，通过 `self.api.tool_registry` 注册 MCP 工具
+- 通过 `self.api.append_system_prompt()` 注入 MCP 工具使用说明
+- 通过 `self.api.register_router()` 注册 `/api/mcp` CRUD 路由
+- 异步启动 MCP 服务器连接，并启动 config watcher 实现热重载
+- 每 3 秒轮询 `config.json` 的 `mcp` 段变化作为兜底
 
-class HelloChannel(Channel):
-    def __init__(self, bus, greeting: str = "Hello from Plugin!"):
-        super().__init__(channel_id="hello", name="Hello Channel", bus=bus)
-        self.greeting = greeting
-
-    async def start(self) -> None:
-        logger.info(f"[hello-channel] {self.greeting}")
-
-    async def send(self, msg: BusMessage) -> None:
-        logger.info(f"[hello-channel] 收到 outbound: {msg.type} → {msg.to_session}")
-
-class HelloPlugin(Plugin):
-    name = "hello"
-    version = "0.1.0"
-
-    def setup(self) -> None:
-        greeting = self.api.config.get("greeting", "Hello, ftre Plugin System!")
-        channel = HelloChannel(bus=self.api.bus, greeting=greeting)
-        self.api.register_channel(channel)
-
-    def teardown(self) -> None:
-        logger.info("[hello-plugin] 已卸载")
-```
+详见 [MCP 服务器](/docs/mcp)。
 
 ---
 
 ## 通用约定
 
-这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`hello` 只注册示例 Channel，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`mcp` 注册 HTTP 路由和 MCP 工具，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。

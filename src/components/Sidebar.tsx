@@ -12,29 +12,27 @@ export default function Sidebar() {
   }, {})
 
   return (
-    <aside className="sticky top-0 z-20 flex max-h-[calc(100vh-64px)] min-w-[220px] max-w-[420px] shrink-0 resize-x flex-col overflow-auto border-b border-black/[0.06] bg-white px-3 py-4 lg:h-[calc(100vh-64px)] lg:w-[292px] lg:border-b-0 lg:border-r">
-      <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-3 pr-1">
+    <aside className="sticky top-0 z-20 hidden h-[calc(100vh-64px)] w-[280px] shrink-0 flex-col overflow-hidden border-r border-black/[0.08] bg-white lg:flex">
+      <nav className="flex-1 overflow-y-auto px-5 py-6">
         {Object.entries(groups).map(([category, items]) => (
-          <section key={category}>
-            <div className="flex w-full items-center rounded px-2 py-1 text-left text-black/40">
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{category}</span>
+          <section key={category} className="mb-6">
+            <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-black/40">
+              {category}
             </div>
-
-            <div className="mt-1 space-y-px">
+            <div className="space-y-px">
               {items.map((doc) => {
                 const active = currentPath === doc.path
                 return (
                   <Link
                     key={doc.path}
                     to={`/docs/${doc.path}`}
-                    className={`flex h-7 items-center rounded-full pr-3 text-[13px] transition-colors ${
+                    className={`block rounded-md px-3 py-1.5 text-[14px] transition-colors ${
                       active
-                        ? 'bg-black/[0.06] font-medium text-black hover:bg-black/[0.06]'
+                        ? 'bg-black/[0.06] font-medium text-black'
                         : 'text-black/60 hover:bg-black/[0.03] hover:text-black'
                     }`}
                   >
-                    <span className="w-6 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{doc.title}</span>
+                    {doc.title}
                   </Link>
                 )
               })}

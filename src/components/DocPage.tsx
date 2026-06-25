@@ -55,7 +55,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
     if (!scrollContainer) return
 
     const handleScroll = () => {
-      const containerTop = scrollContainer.getBoundingClientRect().top + 64 // header offset
+      const containerTop = scrollContainer.getBoundingClientRect().top + 64
       let currentId = toc[0].id
       for (const item of toc) {
         const h = document.getElementById(item.id)
@@ -68,11 +68,10 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
     }
 
     scrollContainer.addEventListener("scroll", handleScroll, { passive: true })
-    handleScroll() // initial
+    handleScroll()
     return () => scrollContainer.removeEventListener("scroll", handleScroll)
   }, [toc])
 
-  // 点击 TOC 项 → 平滑滚动到对应标题
   const handleTocClick = useCallback((id: string) => {
     const h = document.getElementById(id)
     if (!h) return
@@ -83,15 +82,11 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   if (content === null) {
     return (
       <div className="flex min-h-[320px] items-center justify-center">
-        <div className="flex items-center gap-3 rounded-full border border-black/[0.06] bg-white px-4 py-2 text-[13px] text-black/40 shadow-sm">
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/[0.08] border-t-black" />
-          Loading document
-        </div>
+        <div className="text-[14px] text-black/40">Loading...</div>
       </div>
     )
   }
 
-  // 去掉一级标题（由 DocPage 自己的 title 区替代），留 ## 和 ### 给 markdown 渲染
   const renderedContent = content.replace(/^#\s+.+(?:\r?\n)+/, '')
 
   const { prev, next } = (() => {
@@ -111,11 +106,12 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
   }
 
   return (
-    <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_240px]">
-      <article className="min-w-0 max-w-[688px] w-full">
-        <div className="mb-7">
-
-          <h2 className="text-[32px] font-semibold leading-tight text-black sm:text-[40px]">{doc.title}</h2>
+    <div className="grid gap-12 xl:grid-cols-[minmax(0,1fr)_220px]">
+      <article className="min-w-0 max-w-[720px] w-full">
+        <div className="mb-10">
+          <h1 className="text-[40px] font-semibold leading-[1.1] tracking-[-0.02em] text-black">
+            {doc.title}
+          </h1>
         </div>
 
         <div className="prose-docs">
@@ -130,7 +126,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
           </ReactMarkdown>
         </div>
 
-        <footer className="mt-12 grid gap-3 border-t border-black/[0.06] pt-6 sm:grid-cols-2">
+        <footer className="mt-16 grid gap-4 border-t border-black/[0.08] pt-8 sm:grid-cols-2">
           {prev ? <DocLink doc={prev} direction="prev" /> : <div />}
           {next && <DocLink doc={next} direction="next" />}
         </footer>
@@ -146,17 +142,17 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
 
   return (
     <aside className="doc-toc hidden xl:block">
-      <div className="sticky top-6 max-h-[calc(100vh-160px)] overflow-y-auto pl-5">
-        <nav className="space-y-1">
+      <div className="sticky top-6 max-h-[calc(100vh-160px)] overflow-y-auto">
+        <nav className="space-y-2">
           {items.map((item) => (
             <button
               key={item.id}
               onClick={() => onItemClick(item.id)}
-              className={`block w-full truncate py-0.5 text-left text-[13px] leading-5 transition-colors hover:text-black ${
+              className={`block w-full truncate py-1 text-left text-[13px] leading-5 transition-colors hover:text-black ${
                 activeId === item.id
-                  ? 'text-black font-semibold'
+                  ? 'text-black font-medium'
                   : 'text-black/40'
-              } ${item.level === 3 ? 'pl-4' : ''}`}
+              } ${item.level === 3 ? 'pl-3' : ''}`}
             >
               {item.text}
             </button>
@@ -192,7 +188,7 @@ function DocLink({ doc, direction }: { doc: DocEntry; direction: 'prev' | 'next'
   return (
     <Link
       to={`/docs/${doc.path}`}
-      className={`group flex items-center gap-3 rounded-md border border-black/[0.06] bg-white px-4 py-3 text-black/70 shadow-sm transition-colors hover:border-black/[0.12] hover:text-black ${
+      className={`group flex items-center gap-3 rounded-lg border border-black/[0.08] bg-white px-4 py-3 text-black/70 transition-colors hover:border-black/[0.15] hover:text-black ${
         isNext ? 'justify-end text-right sm:col-start-2' : ''
       }`}
     >
