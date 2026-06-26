@@ -372,17 +372,16 @@ _user_message 到达 AgentLoop_
 
 ### 普通回答：`reasoning_complete → assistant_message_complete`
 
-没有工具调用时，reasoning 会合并进 `assistant.content` 的第一个 text part，`reasoning_content` 固定写空字符串。
+没有工具调用时，reasoning 写入 `reasoning_content`，模型正文写入 `content`（text parts 列表）。`format_assistant_message()` 始终输出 `reasoning_content` 字段——有思考内容时为思考文本，无思考时为空字符串。
 
 ```json
 [
   {
     "role": "assistant",
     "content": [
-      {"type": "text", "text": "思考过程"},
       {"type": "text", "text": "最终回答"}
     ],
-    "reasoning_content": ""
+    "reasoning_content": "思考过程"
   }
 ]
 ```
@@ -449,13 +448,16 @@ _user_message 到达 AgentLoop_
 
 ### 只有可见文本：`assistant_message_complete`
 
-如果没有 reasoning，也没有 tool call，则只生成普通 assistant message，不额外添加 `reasoning_content`。
+如果没有 reasoning，也没有 tool call，则生成普通 assistant message。`content` 为 text parts 列表，`reasoning_content` 固定为空字符串（`format_assistant_message()` 始终输出此字段）。
 
 ```json
 [
   {
     "role": "assistant",
-    "content": "最终回答"
+    "content": [
+      {"type": "text", "text": "最终回答"}
+    ],
+    "reasoning_content": ""
   }
 ]
 ```
@@ -493,18 +495,18 @@ _user_message 到达 AgentLoop_
 
 工具返回 `AgentEvent`（非 `str`）时，`react_runner` 在所有 `tool_result` 之后统一注入此事件到 memory。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
 
-典型场景：`see_img` 工具返回 `UserMessageEvent(content=[image_url])`，Agent 无需等待用户即可识别图片内容。
+典型场景：`read` 工具在读取图片时返回 `UserMessageEvent(content=[image_file])`，Agent 无需等待用户即可识别图片内容。图片数据落盘到 OS temp 目录，事件中只携带文件路径；`to_openai_message()` 在写入 memory 时自动将 `image_file` 转为 `image_url`（读文件转 base64 data URL）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `content` | `str \| list[dict]` | OpenAI 格式 user message content |
+| `content` | `str \| list[dict]` | OpenAI 格式 user message content；图片为 `{"type": "image_file", "path": "<abs_path>", "mime_type": "<mime>"}` |
 | `metadata` | `dict` | 默认 `{"hide": True}`，前端由此跳过渲染 |
 
 ```json
 {
   "type": "user_message",
   "data": {
-    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}],
+    "content": [{"type": "image_file", "path": "C:/Users/.../Temp/ftre_images/screenshot.png", "mime_type": "image/png"}],
     "metadata": {"hide": true}
   }
 }

@@ -13,10 +13,10 @@
 │  │ WebSocket + HTTP API Client   │  │
 │  └────────────┬──────────────────┘  │
 └───────────────┼──────────────────────┘
-                │ Gateway 监听: 0.0.0.0:19470
-                │ 客户端默认: ws://127.0.0.1:19470/
-                │ HTTP API: http://127.0.0.1:19470/api
-                │ renderer dev: http://127.0.0.1:50000
+                │ Gateway 默认监听: 127.0.0.1:48650（可通过 config.json 的 servers.gateway 调整）
+                │ 客户端默认: ws://127.0.0.1:48650/
+                │ HTTP API: http://127.0.0.1:48650/api
+                │ renderer dev: http://127.0.0.1:48651
 ┌───────────────┼──────────────────────┐
 │  ftre Gateway (Python / FastAPI)     │
 │               │                      │
@@ -121,13 +121,14 @@
 
 ### 工具能力裁剪（Tool Capability Gating）
 
-`build_default_tools()` 根据当前模型配置决定注册哪些工具。不支持视觉的模型不会注册 `see_img`，避免模型调用无效工具。
+`build_default_tools()` 根据当前模型配置决定注册哪些工具。不支持视觉的模型，`read` 工具的 description 中不会声明图片读取能力，避免模型调用无效功能。
 
 ```python
 def build_default_tools(..., llm_config=None):
     tools = [bash, read, write, edit, set_workspace, cron, ...]
-    if getattr(llm_config, "vision", False):
-        tools.append(see_img)
+    # read 工具通过 vision 参数决定是否描述图片读取能力
+    # 若 channel_manager 存在，追加 task 和 send_message
+    # 若 tool_registry 存在，追加插件/MCP 注册的工具
 ```
 
 ### Tool → AgentEvent 注入
@@ -136,11 +137,11 @@ def build_default_tools(..., llm_config=None):
 
 流程：`tool.func() → AgentEvent → ToolResult.event → react_runner 两阶段写入 → LLM 下一轮看到`
 
-### see_img 工具
+### read 工具（图片读取）
 
-内置图片查看工具，支持本地绝对路径和 HTTP(S) URL。大图自动压缩（文件 >5MB 时触发：先按 >4096px resize 缩放，再按 JPEG 质量压缩），统一转 JPEG。仅在 `llm_config.vision=True` 时注册。
+`read` 工具整合了文本与图片读取。对本地路径自动检测：若后缀为图片扩展名（png/jpg/jpeg/gif/webp/bmp/svg）或 HTTP(S) URL，走图片分支；否则走文本分支。图片分支仅在 `llm_config.vision=True` 时可用（否则返回错误提示）。大图自动压缩：文件 >5MB 时触发，先按 >4096px resize 缩放，再按 JPEG 质量压缩，统一转 JPEG。
 
-返回 `UserMessageEvent(content=[image_url])`，LLM 直接看到图片，前端隐藏（`metadata.hide=true`）。
+返回 `UserMessageEvent(content=[image_file])`，图片数据落盘到 OS temp 目录，事件中只携带文件路径（`{"type": "image_file", "path": "<abs_path>", "mime_type": "<mime>"}`）。base64 转换延迟到 LLM 出口：当前轮通过 `to_openai_message()` 转换，历史重建通过 `normalize_user_content()` 转换。前端隐藏（`metadata.hide=true`）。
 
 ### Agent 事件体系
 

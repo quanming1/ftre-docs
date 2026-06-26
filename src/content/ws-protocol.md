@@ -2,9 +2,11 @@
 
 ## 连接信息
 
-- **地址**: `ws://127.0.0.1:19470/`
+- **地址**: `ws://127.0.0.1:48650/`
 - **格式**: JSON 文本帧
 - **编码**: UTF-8
+
+> Gateway 默认从 `~/.ftre/config.json` 的 `servers.gateway` 读取 host / port，缺省 `127.0.0.1:48650`。下文中所有 HTTP API 路径均基于 `http://127.0.0.1:48650/api`。前端 dev 服务默认端口为 `48651`。
 
 ## 连接模型
 
@@ -120,9 +122,10 @@
 
 **行为流程**：
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
-2. 隐式 attach 当前 session
-3. `frame.id` 写入 `metadata.frame_id`
-4. `data` + `metadata` → `Channel.receive(..., kind="user_message")` → Bus inbound → AgentLoop
+2. 附件落盘（`_persist_attachments`）：base64 解码后存到 OS temp 目录（`$TEMP/ftre_images/`），将 `data` 字段替换为 `path`（文件绝对路径）。事件链路不再携带 base64
+3. 隐式 attach 当前 session
+4. `frame.id` 写入 `metadata.frame_id`
+5. `data` + `metadata` → `Channel.receive(..., kind="user_message")` → Bus inbound → AgentLoop
 
 **id 与 frame_id 的用途**：
 - 前端发送时生成 `id`，同时本地 push 一条乐观占位消息（`userMsg.id = frame.id`）
@@ -487,7 +490,7 @@
 |----------------|------|------|
 | `enabled` | bool | 固定 `true`（启用成功） |
 | `events` | number | 被摘要覆盖的事件数 |
-| `tokens_before` | number | 启用前估算 token |
+| `tokens_before` | number | 取自 pending 事件的 `tokens_before` 字段（压缩创建时的估算值），非启用时实时估算 |
 | `tokens_after` | number \| undefined | 启用后估算 token |
 | `summary` | string | 摘要预览 |
 | `silent` | bool | 是否静默（可选；`silent=true` 时显式写入） |
@@ -629,12 +632,15 @@
 
 ### 附件对象字段
 
+> **前端发送格式**（WebSocket 入站）：前端发送 `data` 字段（base64 编码），后端校验通过后落盘到 temp 目录，将 `data` 替换为 `path`（绝对路径）。事件链路和 DB 持久化中只保留 `path`。
+
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
 | `type` | string | 是 | 附件类型，当前仅支持 `"image"` |
 | `mime_type` | string | 是 | MIME 类型：`image/png` / `image/jpeg` / `image/webp` / `image/gif` |
-| `data` | string | 是 | Base64 编码的图片数据 |
-| `name` | string | 否 | 原始文件名 |
+| `data` | string | 是* | Base64 编码的图片数据（*前端发送时必填，后端落盘后删除） |
+| `path` | string | — | 落盘后的文件绝对路径（后端落盘后填充，前端不发送） |
+| `name` | string | 否 | 原始文件名（用于 temp 文件命名，会做特殊字符过滤） |
 
 ### 校验规则
 
@@ -774,6 +780,7 @@
 | POST | `/api/skills` | 创建 Skill（返回 201） |
 | PUT | `/api/skills/:name` | 覆盖写 Skill 正文 |
 | DELETE | `/api/skills/:name` | 删除 Skill（返回 204；目录形态会连同 references/scripts 一并删除） |
+| PATCH | `/api/skills/:name/toggle` | 切换 Skill 的禁用状态（在 `config.json` 的 `disabled_skills` 数组中添加/移除该名称；返回 `{name, disabled}`） |
 | GET | `/api/cron` | 列出所有 Cron 任务 |
 | GET | `/api/cron/:job_id` | 获取单个 Cron 任务 |
 | POST | `/api/cron` | 创建 Cron 任务（返回 201） |
@@ -788,6 +795,6 @@
 | PATCH | `/api/mcp/{name}` | 局部更新 MCP 服务器配置并增量重连 |
 | DELETE | `/api/mcp/{name}` | 删除 MCP 服务器并断开连接（返回 204） |
 
-> 桌面端 `triggerCompaction()` 当前仍会请求 `POST /api/sessions/:id/compact`（见 `packages/renderer/src/services/api.ts`），但后端 `routes.py` 尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+> 可靠的手动压缩入口是发送 `/compact` 指令。后端 `routes.py` 当前没有 `POST /api/sessions/:id/compact` 路由；前端 `ChatHeader` 虽有压缩菜单 UI 并调用该路由，但会因后端未实现而失败。
 
 `GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数，所有请求都会得到全量消息。
