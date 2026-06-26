@@ -6,7 +6,8 @@ export default defineConfig({
   assetsInclude: ['**/*.md'],
   server: {
     host: '127.0.0.1',
-    port: 5173,
     strictPort: true,
+    // 端口不在此硬编码：由 scripts/dev.mjs 读取 ~/.ftre/config.json 的
+    // servers.docs.port 后通过 `vite --port` 传入。
   },
 })
