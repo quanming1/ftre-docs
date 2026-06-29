@@ -170,10 +170,7 @@
 |---------------|------|------|
 | `channel_id` | string | 目标 Channel ID，即后端 `BusMessage.to_channel`；普通 ws 消息为 `"ws"`，全局广播为 `"*"` |
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
-| `volatile` | boolean | 可选。标记这是未入库的流式片段（`assistant_message` / `reasoning` / `tool_call_streaming`），前端据此决定是否持久化到本地状态 |
-| `volatile_epoch` | string | 可选。8 位 hex，后端进程级 epoch，重启后变化。配合 `volatile_seq` 用于客户端去重 replay/live 重叠帧 |
-| `volatile_seq` | number | 可选。session 内递增序列号，从 1 开始。客户端用 `epoch + seq` 去重，避免 attach 后 replay 和 live 流重叠时重复渲染 |
-| `replay` | boolean | 可选。标记这是 attach 后补发的历史帧（来自 volatile replay buffer），非 live 事件。客户端可用于跳过某些 UI 副作用（如滚动到底部） |
+| `volatile_seq` | number | 可选。session 内递增序列号，从 1 开始。仅出现在未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming`）上。客户端用 `session_id + volatile_seq` 去重，避免 attach replay 和 live 流重叠时重复渲染；WS 重连时清空去重状态 |
 
 **Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件（最多 1000 条/session）。当客户端 attach 时，先补发这些缓存，再继续接收 live 流。稳定事件到达时（如 `assistant_message_complete`）自动清理对应的流式草稿。
 
