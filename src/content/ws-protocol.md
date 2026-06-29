@@ -172,7 +172,7 @@
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
 | `volatile_seq` | number | 可选。session 内递增序列号，从 1 开始。仅出现在未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming`）上。客户端用 `session_id + volatile_seq` 去重，避免 attach replay 和 live 流重叠时重复渲染；WS 重连时清空去重状态 |
 
-**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件（最多 1000 条/session）。当客户端 attach 时，先补发这些缓存，再继续接收 live 流。稳定事件到达时（如 `assistant_message_complete`）自动清理对应的流式草稿。
+**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件，长度不设上限。当客户端 attach 时，先补发这些缓存，再继续接收 live 流。稳定事件到达时（如 `assistant_message_complete`）自动清理对应的流式草稿。
 
 ### 事件类型完整列表
 
@@ -807,8 +807,8 @@
 
 - **2025-06-26**：与 `ftre/src/ftre/channel/ws_channel.py` / `ftre-agent-core/.../websocket-client.ts` / `ftre/src/ftre/api/routes.py` 核对，描述准确。
   - WS 默认地址 `ws://127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致；
-  - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现（`channel/ws_channel.py:441,475`）；
-  - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:437-453`）；
-  - 前端 `websocket-client.ts:226-232` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
-  - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:33-48`，校验函数 `channel/ws_channel.py:168-205`）；
+  - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:465`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:499`；
+  - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:459-478`）；
+  - 前端 `websocket-client.ts:230-236` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
+  - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-47`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:188-228`）；
   - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
