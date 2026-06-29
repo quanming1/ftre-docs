@@ -122,7 +122,7 @@
 
 **行为流程**：
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
-2. 附件落盘（`_persist_attachments`）：base64 解码后存到 OS temp 目录（`$TEMP/ftre_images/`），将 `data` 字段替换为 `path`（文件绝对路径）。事件链路不再携带 base64
+2. 附件落盘（`_persist_attachments`）：base64 解码后存到 `~/.ftre/assets/images/`，将 `data` 字段替换为 `path`（文件绝对路径）。事件链路不再携带 base64
 3. 隐式 attach 当前 session
 4. `frame.id` 写入 `metadata.frame_id`
 5. `data` + `metadata` → `Channel.receive(..., kind="user_message")` → Bus inbound → AgentLoop
@@ -463,7 +463,7 @@
 
 #### context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed
 
-上下文压缩实时事件。当前实际代码路径中，自动压缩与关键路径压缩都统一按 `precompact_threshold`（默认 50%）触发，并直接写入 `context_compact(enabled=true)`；`enable_pending_compact()` 与 `context_compact_enabled` 仍然保留用于兼容历史上可能存在的 pending（`enabled=false`）事件，但当前代码没有新的 `enabled=false` 写入路径。手动 `/compact` 也会先尝试启用历史 pending，没有则直接生成 `enabled=true` 的压缩事件。
+上下文压缩实时事件。当前实际代码路径中，自动压缩与关键路径压缩都统一按 `precompact_threshold`（默认 50%）触发，并直接写入 `context_compact(enabled=true)`；自动压缩的 `silent` 取 `agents.defaults.context.silent`，默认 `true`。`enable_pending_compact()` 与 `context_compact_enabled` 仍然保留用于兼容历史上可能存在的 pending（`enabled=false`）事件，但当前代码没有新的 `enabled=false` 写入路径。手动 `/compact` 也会先尝试启用历史 pending，没有则直接生成 `enabled=true` 的压缩事件。
 
 **context_compact_start** data：
 
@@ -632,7 +632,7 @@
 
 ### 附件对象字段
 
-> **前端发送格式**（WebSocket 入站）：前端发送 `data` 字段（base64 编码），后端校验通过后落盘到 temp 目录，将 `data` 替换为 `path`（绝对路径）。事件链路和 DB 持久化中只保留 `path`。
+> **前端发送格式**（WebSocket 入站）：前端发送 `data` 字段（base64 编码），后端校验通过后落盘到 `~/.ftre/assets/images/`，将 `data` 替换为 `path`（绝对路径）。事件链路和 DB 持久化中只保留 `path`。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
@@ -640,7 +640,7 @@
 | `mime_type` | string | 是 | MIME 类型：`image/png` / `image/jpeg` / `image/webp` / `image/gif` |
 | `data` | string | 是* | Base64 编码的图片数据（*前端发送时必填，后端落盘后删除） |
 | `path` | string | — | 落盘后的文件绝对路径（后端落盘后填充，前端不发送） |
-| `name` | string | 否 | 原始文件名（用于 temp 文件命名，会做特殊字符过滤） |
+| `name` | string | 否 | 原始文件名（用于存储文件命名，会做特殊字符过滤） |
 
 ### 校验规则
 
@@ -775,6 +775,7 @@
 | GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；前端分页加载代码会拼 `limit`/`before_ts`/`after_ts` 到 URL 并读取 `has_more`/`total`，但后端不读取这些查询参数且只返回 `{"messages": [...]}`，因此首屏/分页请求都会被当作全量请求处理，前端因缺少 `has_more` 认为没有更早页；真实用户输入历史事件为 `user_message(metadata.hide=false)`） |
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区（支持 `channel_id` 过滤；默认 `ws`） |
+| GET | `/api/images/{filename}` | 返回 `~/.ftre/assets/images/` 目录下的图片文件，供前端历史消息渲染附件图片；对 `filename` 做 basename 过滤防路径穿越 |
 | GET | `/api/skills` | 列出所有 Skill 元信息 |
 | GET | `/api/skills/:name` | 读取单个 Skill 完整信息 |
 | POST | `/api/skills` | 创建 Skill（返回 201） |
@@ -795,6 +796,16 @@
 | PATCH | `/api/mcp/{name}` | 局部更新 MCP 服务器配置并增量重连 |
 | DELETE | `/api/mcp/{name}` | 删除 MCP 服务器并断开连接（返回 204） |
 
-> 可靠的手动压缩入口是发送 `/compact` 指令。后端 `routes.py` 当前没有 `POST /api/sessions/:id/compact` 路由；前端 `ChatHeader` 虽有压缩菜单 UI 并调用该路由，但会因后端未实现而失败。
+> 可靠的手动压缩入口是发送 `/compact` 指令。后端 `routes.py` 当前没有 `POST /api/sessions/:id/compact` 路由；前端 ChatHeader 的「归档会话」菜单仍存在，调用该路由但后端未实现，因此实际无法生效。建议使用 `/compact` 指令。
 
 `GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数，所有请求都会得到全量消息。
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre/src/ftre/channel/ws_channel.py` / `ftre-agent-core/.../websocket-client.ts` / `ftre/src/ftre/api/routes.py` 核对，描述准确。
+  - WS 默认地址 `ws://127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致；
+  - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现（`channel/ws_channel.py:311,349`）；
+  - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:322-327`）；
+  - 前端 `websocket-client.ts:222-228` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
+  - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（`channel/ws_channel.py:34-45`）；
+  - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。

@@ -105,6 +105,8 @@
 - `register_channel()` — 注册 Channel
 - `tool_registry` 属性 — 返回 `ToolRegistry` 实例，插件通过 `self.api.tool_registry.register(tool)` 注册 Tool
 - `register_hook()` — 注册生命周期 Hook
+- `register_router()` — 注册 FastAPI APIRouter，挂载到 `/api` 前缀下
+- `append_system_prompt()` — 向所有会话的 system prompt 末尾追加内容
 - `command_manager` 属性 — 返回 `CommandManager` 实例，插件可通过 `api.command_manager.register()` 注册斜杠指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`，因此 `FtrePluginApi.command_manager` 运行时为 `CommandManager` 实例而非 `None`。系统级指令（如 `/cancel`，`system=True`）在锁外执行；普通指令在 Pipeline 锁内执行
 - `event_loop` 属性 — 返回主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。当前 `main.py` 通过 `event_loop=lambda: event_loop` 在 `PluginManager` 构造函数中传入事件循环，`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）
 
@@ -137,12 +139,27 @@ def build_default_tools(..., llm_config=None):
 
 流程：`tool.func() → AgentEvent → ToolResult.event → react_runner 两阶段写入 → LLM 下一轮看到`
 
-### read 工具（图片读取）
+### read 工具（文本/图片/目录）
 
-`read` 工具整合了文本与图片读取。对本地路径自动检测：若后缀为图片扩展名（png/jpg/jpeg/gif/webp/bmp/svg）或 HTTP(S) URL，走图片分支；否则走文本分支。图片分支仅在 `llm_config.vision=True` 时可用（否则返回错误提示）。大图自动压缩：文件 >5MB 时触发，先按 >4096px resize 缩放，再按 JPEG 质量压缩，统一转 JPEG。
+`read` 工具整合了文本读取、图片读取与目录列举。对本地路径自动检测：若后缀为图片扩展名（png/jpg/jpeg/gif/webp/bmp/svg）或 HTTP(S) URL，走图片分支；若为目录路径，返回该目录下的条目列表（目录在前、文件在后，各自按名排序，文件附带字节大小）；否则走文本分支。图片分支仅在 `llm_config.vision=True` 时可用（否则返回错误提示）。大图自动压缩：文件 >5MB 时触发，先按 >4096px resize 缩放，再按 JPEG 质量压缩，统一转 JPEG。
 
-返回 `UserMessageEvent(content=[image_file])`，图片数据落盘到 OS temp 目录，事件中只携带文件路径（`{"type": "image_file", "path": "<abs_path>", "mime_type": "<mime>"}`）。base64 转换延迟到 LLM 出口：当前轮通过 `to_openai_message()` 转换，历史重建通过 `normalize_user_content()` 转换。前端隐藏（`metadata.hide=true`）。
+返回 `UserMessageEvent(content=[image_file])`，图片数据落盘到 `~/.ftre/assets/images/`，事件中只携带文件路径（`{"type": "image_file", "path": "<abs_path>", "mime_type": "<mime>"}`）。base64 转换延迟到 LLM 出口：当前轮通过 `to_openai_message()` 转换，历史重建通过 `normalize_user_content()` 转换。前端隐藏（`metadata.hide=true`）。
 
 ### Agent 事件体系
 
 事件从裸 dict 迁移为 `@dataclass` 类（12 个子类含 `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。
+
+## 校对记录
+
+- **2025-06-26**：整体与三个仓库源码核对，描述准确。
+  - `EventBus` 接口（`publish_inbound` / `publish_outbound` / `subscribe_inbound` / `subscribe_outbound` / `use_inbound` / `use_outbound`）与 `ftre/src/ftre/bus/bus.py` 一致；
+  - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
+  - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
+  - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
+  - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:362-372` 一致；
+  - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router` / `append_system_prompt`）与 `ftre/src/ftre/plugin/plugin.py` 一致；
+  - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:714-721` 一致；
+  - `CompactHandler.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_handler.py` 一致；
+- `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
+- **2025-07-15**：补全 `read` 工具目录列举功能描述，与 `read.py:187-189` 的 `_list_dir` 一致。
+- **2025-07-16**：修正 `_list_dir` 行号引用。函数定义在 `read.py:45-55`，调用点在 `read.py:187-189`。原记录仅标注了调用点行号。

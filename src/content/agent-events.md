@@ -280,7 +280,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 
 ### done
 
-**执行结束**。对已经进入 `ReActAgent.run()` / `ReActRunner` 的一次运行，正常完成、失败、取消或超迭代时都会产出此事件；`AgentLoop` 在入参为空、session 不存在、channel 不匹配等早退路径不会发布 `done`。取消时 `ReActRunner._loop()` 捕获 `CancelledError` 产出 `done(success=false, reason="cancelled")`；`AgentLoop._run_async()` 中 `CancelledError` 由 `task.cancel()` 触发，也会产出同样的 `done` 事件。
+**执行结束**。对已经进入 `ReActAgent.run()` / `ReActRunner` 的一次运行，正常完成、失败、取消或超迭代时都会产出此事件；`AgentLoop` 在入参为空、session 不存在、channel 不匹配等早退路径不会发布 `done`。取消时 `ReActRunner._loop()` 捕获 `CancelledError` 产出 `done(success=false, reason="cancelled")`；如果 `task.cancel()` 在 `AgentLoop._run_async()` 中直接触发 `CancelledError`，`AgentLoop` 也会补发同样的 outbound `done` 事件，但这条补发事件不走 `_PERSISTENT_CLASSES` 入库路径。
 
 ```json
 {
@@ -337,7 +337,7 @@ _user_message 到达 AgentLoop_
 | 正常完成 | `"completed"` | true | 模型不再调用工具，直接输出最终回答 |
 | 超出迭代 | `"max_iterations"` | false | 达到 `max_iterations` 上限 |
 | 错误 | `"error"` | false | LLM 调用失败且不可重试/重试耗尽 |
-| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 系统级指令，或前端 `cancel` 帧被转为 `/cancel` 后触发 `agent.cancel_nowait()` + `task.cancel()`，Agent 在 LLM stream 的 await 处抛出 `CancelledError` |
+| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 系统级指令，或前端 `cancel` 帧被转为 `/cancel` 后触发 `agent.cancel_nowait()` + `task.cancel()`，Agent 在 LLM stream 的 await 处抛出 `CancelledError`；若取消直接由 `AgentLoop` 捕获，则由 `AgentLoop` 补发 outbound `done(cancelled)` |
 
 ---
 
@@ -495,7 +495,7 @@ _user_message 到达 AgentLoop_
 
 工具返回 `AgentEvent`（非 `str`）时，`react_runner` 在所有 `tool_result` 之后统一注入此事件到 memory。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
 
-典型场景：`read` 工具在读取图片时返回 `UserMessageEvent(content=[image_file])`，Agent 无需等待用户即可识别图片内容。图片数据落盘到 OS temp 目录，事件中只携带文件路径；`to_openai_message()` 在写入 memory 时自动将 `image_file` 转为 `image_url`（读文件转 base64 data URL）。
+典型场景：`read` 工具在读取图片时返回 `UserMessageEvent(content=[image_file])`，Agent 无需等待用户即可识别图片内容。图片数据落盘到 `~/.ftre/assets/images/`，事件中只携带文件路径；`to_openai_message()` 在写入 memory 时自动将 `image_file` 转为 `image_url`（读文件转 base64 data URL）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -506,8 +506,20 @@ _user_message 到达 AgentLoop_
 {
   "type": "user_message",
   "data": {
-    "content": [{"type": "image_file", "path": "C:/Users/.../Temp/ftre_images/screenshot.png", "mime_type": "image/png"}],
+    "content": [{"type": "image_file", "path": "C:/Users/.../.ftre/assets/images/screenshot.png", "mime_type": "image/png"}],
     "metadata": {"hide": true}
   }
 }
 ```
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 完整核对，事件模型描述准确。
+  - 12 个事件类型（`tool_call` / `tool_result` / `assistant_message` / `assistant_message_complete` / `reasoning` / `reasoning_complete` / `error` / `retry` / `done` / `tool_call_streaming` / `usage_update` / `user_message`）与 `EventType` 枚举完全一致；
+  - 各 `@dataclass` 子类字段（如 `ToolCallEvent.tool_id` → `data.id`）与 `_data_dict()` 序列化映射一致；
+  - `DoneReason` 枚举（`completed` / `max_iterations` / `error` / `cancelled`）与代码一致；
+  - `tool_result.status` 实际取值（`completed` / `failed` / `cancelled`）与 `tool_handler.py` 中 `status=` 调用一致；
+  - `tool_call_streaming` 仅含 `id` / `name` / `arguments_delta`（无 `index`）与 `react_runner.py:471-477` 中 `tool_call_streaming_event([{...}])` 构造一致；
+  - `usage_update` 在流循环内产出（`react_runner.py:495`），`assistant_message_complete` 在流循环后产出，因此 `usage_update` 始终早于 `assistant_message_complete`；
+  - `react_runner` 两阶段写入（先所有 `tool_result`，再统一追加 `UserMessageEvent`）与 `react_runner.py:660-686` 一致；
+  - `format_assistant_message` 始终输出 `reasoning_content` 字段（`reasoning.py:35`），与 OpenAI messages 重构一致。
