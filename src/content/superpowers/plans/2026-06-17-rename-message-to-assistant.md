@@ -1,5 +1,7 @@
 # Message/MessageComplete → AssistantMessage 重命名
 
+> **历史计划**：本次重命名已完成。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 中已使用 `ASSISTANT_MESSAGE` / `ASSISTANT_MESSAGE_COMPLETE` 及对应的 `AssistantMessageEvent` / `AssistantMessageCompleteEvent`。本文档保留为设计演化参考，具体实现请以当前源码为准。
+
 > 不留兼容，不产生任何尾巴，数据库和前/后端同步执行。
 
 **Goal:** `MessageEvent`/`MessageCompleteEvent` 重命名为 `AssistantMessageEvent`/`AssistantMessageCompleteEvent`，与 `UserMessageEvent` 对称。

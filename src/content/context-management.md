@@ -3,6 +3,7 @@
 > ftre 当前的上下文压缩**实际触发路径**统一使用 `precompact_threshold`（默认 50%）：
 > idle / usage 后台路径直接写入 `context_compact(enabled=true)`；
 > 用户输入路径标记 `need_compact` 后在 `_run_async()` 中同样写入 `enabled=true`。
+> 自动压缩是否静默取 `config.context.silent`，默认 `true`。
 > 但配置结构仍保留两个字段：`precompact_threshold`（默认 0.5）与
 > `compact_threshold`（默认 0.6）。后者当前主要写入 `enable_ratio` 元数据，
 > 不参与现有调用方的触发判断。
@@ -17,7 +18,7 @@
 | 降低延迟 | 50% 水位提前后台压缩，把 LLM 摘要耗时挪到 idle / usage 事件之后 |
 | 降低信息损失 | 旧历史压缩为摘要 + 保留最近 tail 原文 |
 | 防止溢出 | 实际调用路径在 50% 水位触发压缩，写入 `enabled=true` 的 compact 事件 |
-| 用户无感 | 自动压缩 `silent=true`，前端不渲染气泡；手动 `/compact` 才显示 |
+| 用户无感 | 自动压缩默认 `silent=true`（由 `agents.defaults.context.silent` 控制），前端不渲染气泡；手动 `/compact` 使用 `silent=false` 才显示 |
 
 ---
 
@@ -50,8 +51,8 @@
 
 行为：
 - `should_compact(threshold=precompact_threshold=0.5)` 检查水位。
-- 超阈值则 `compact(enabled=True, silent=True)`，直接写入已启用压缩事件。
-- 自动路径 `silent=true`，前端只刷新 token usage，不渲染气泡。
+- 超阈值则 `compact(enabled=True, silent=config.context.silent)`，直接写入已启用压缩事件。
+- 自动路径使用 `silent=config.context.silent`（默认 `true`）；默认情况下前端只刷新 token usage，不渲染气泡。
 
 ### 2.2 用户输入路径
 
@@ -62,7 +63,7 @@
 - `_step_compact` 检查水位，超阈值则标记 `data["need_compact"] = True`。
 - `_run_async()` 中看到 `need_compact` 后：
   1. 先尝试 `enable_pending_compact()` 启用历史上已有的 pending（通常无）
-  2. 没有 pending 则 `compact(enabled=True)` 同步压缩
+  2. 没有 pending 则 `compact(enabled=True, silent=config.context.silent)` 同步压缩
 - 启用后 `SessionManager.to_openai_messages()` 遇到该事件清空旧 messages 并注入摘要。
 
 ---
@@ -86,9 +87,9 @@
 | `events_before` | number | 被摘要覆盖的事件数 |
 | `tokens_before` | number | 压缩前估算 token |
 | `tokens_after` | number \| undefined | 启用后估算 token；仅 `enabled=true` 时写入。`compact()` 写入时 compact 事件在末尾、无 tail，因此仅估算 summary 本身；`enable_pending_compact()` 启用历史 pending 时才包含 tail 事件（当前无代码写入 `enabled=false`，此路径实际不触发） |
-| `silent` | bool \| undefined | 是否静默；仅 `silent=true` 时写入（自动压缩），手动 `/compact` 不写入此字段 |
+| `silent` | bool \| undefined | 是否静默；仅传入 `silent=true` 时写入。自动压缩默认写入，若配置 `agents.defaults.context.silent=false` 则不写入；手动 `/compact` 不写入此字段 |
 
-> `silent` 既出现在通知事件（`context_compact_start / done / enabled / failed`）的 `data` 中，也写入持久化的 `context_compact` 游标事件（仅 `silent=true` 时）。前端在历史回放时据此跳过自动压缩事件的渲染。
+> `silent` 既出现在通知事件（`context_compact_start / done / enabled / failed`）的 `data` 中，也会在传入 `silent=true` 时写入持久化的 `context_compact` 游标事件。前端在历史回放时据此跳过静默压缩事件的渲染。
 
 `timestamp` 为压缩触发时间（不使用 epsilon 修正），写入 DB 时由 `save_message(timestamp=now)` 指定；`context_compact` 事件作为普通历史事件追加在事件流末尾，后续新增事件自然成为它的 tail。
 
@@ -169,9 +170,9 @@ elif _t == "context_compact":
 
 | 时机 | 水位 | 行为 | silent |
 |------|------|------|--------|
-| `usage_update` 实时监测 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发 | `true` |
-| 每轮 `done` 后 idle 检查 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发；冷却期内跳过 | `true` |
-| 用户下一轮输入前 | `>= 0.5`（`precompact_threshold`） | 标记 `need_compact=True`；实际在 `_run_async` 中先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True)` | `true` |
+| `usage_update` 实时监测 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发 | `config.context.silent`（默认 `true`） |
+| 每轮 `done` 后 idle 检查 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发；冷却期内跳过 | `config.context.silent`（默认 `true`） |
+| 用户下一轮输入前 | `>= 0.5`（`precompact_threshold`） | 标记 `need_compact=True`；实际在 `_run_async` 中先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True)` | `config.context.silent`（默认 `true`） |
 | 用户手动 `/compact` | 无需水位 | 先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True, silent=False)` | `false` |
 
 > 后台 idle/usage 路径受冷却机制（`_compact_retry_after`）保护：遇到不可重试 LLM 错误（`auth_error` / `bad_request` / `content_filter`）后进入 300 秒冷却期，期间跳过后台压缩。用户输入路径和手动 `/compact` 不受冷却限制。
@@ -180,8 +181,8 @@ elif _t == "context_compact":
 
 ## 7. 前端行为
 
-自动压缩事件默认 `silent=true`：
-- `context_compact_start / done / failed` 不渲染气泡。
+自动压缩事件使用 `config.context.silent`，默认 `silent=true`：
+- `context_compact_start / done / failed` 在携带 `silent=true` 时不渲染气泡。
 - `context_compact_done` 到达后立即刷新 token usage。
 - `context_compact_enabled` 到达后再次刷新 token usage，因为上下文视图从完整历史切换为 summary + tail。
 
@@ -201,7 +202,7 @@ elif _t == "context_compact":
 |------|------|------|
 | `events` | number | 本次 head 事件数 |
 | `tokens` | number | 压缩前估算 token |
-| `silent` | bool | 是否静默（可选；当前代码在 `silent=true` 时显式写入） |
+| `silent` | bool | 是否静默（可选；传入 `silent=true` 时显式写入） |
 
 ### context_compact_done
 
@@ -214,7 +215,7 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 | `tokens_before` | number | 压缩前估算 token |
 | `tokens_after` | number \| null | 启用后估算 token |
 | `summary` | string | 摘要预览 |
-| `silent` | bool | 是否静默（可选；当前代码在 `silent=true` 时显式写入） |
+| `silent` | bool | 是否静默（可选；传入 `silent=true` 时显式写入） |
 
 ### context_compact_enabled
 
@@ -236,7 +237,7 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `reason` | string | 失败原因 |
-| `silent` | bool | 是否静默（可选；当前代码在 `silent=true` 时显式写入） |
+| `silent` | bool | 是否静默（可选；传入 `silent=true` 时显式写入） |
 
 ---
 
@@ -279,3 +280,24 @@ ftre 的差异：
 - OpenCode 触发后立即启用；ftre 同样在触发后直接写入 `enabled=true`。
 - Nanobot 把摘要写入 memory/history；ftre 追加 SQLite 事件流游标。
 - ftre 保留完整原始事件，不物理删除历史。
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre/src/ftre/agent/compact_handler.py` / `ftre/src/ftre/agent/loop.py` / `ftre/src/ftre/session/manager.py` / `ftre/src/ftre/config.py` 完整核对，**所有关键事实均与源码一致**：
+  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_handler.py:42-43`）；
+  - `ContextConfig` dataclass 字段（`precompact_threshold` / `compact_threshold` / `consolidation_ratio` / `safety_buffer` / `idle_compaction` / `silent`）与 `config.py:58-77` 一致；
+  - 实际触发路径统一使用 `precompact_threshold`：`_step_compact`（`agent/loop.py:333-340`）、`_schedule_idle_compact`（`agent/loop.py:625-630`）、`_run_async` 的 `enable_pending_compact → compact(enabled=True)`（`agent/loop.py:416-434`）；
+  - `compact_threshold` 当前仅作为 `enable_ratio` 元数据写入 `context_compact` 事件（`compact_handler.py:292`），不参与触发决策；
+  - `should_compact()` 默认阈值是 `compact_threshold`，但所有调用方都显式传入 `precompact_threshold`，与本文描述一致；
+  - 自动压缩的 `silent` 取 `config.context.silent`（默认 `true`），后台 idle/usage 路径与用户输入关键路径均按该配置传入 `CompactHandler`，手动 `/compact` 固定 `silent=False`；
+  - 后台 idle/usage 路径的冷却机制（`_compact_retry_after`，`COMPACT_UNRETRYABLE_LLM_CODES = {"auth_error", "bad_request", "content_filter"}`，`COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`，`agent/loop.py:49-50`）仅作用于后台路径，不影响用户输入路径和手动 `/compact`；
+  - 后台路径去重通过 `_compact_tasks`（`agent/loop.py:113`）保证同一 session 同一时间最多一个后台 compact task 在飞；
+  - `compact()` 实际写入的 `context_compact` 事件字段：`summary` / `enabled` / `trigger_ratio` / `enable_ratio` / `events_before` / `tokens_before` / `tokens_after`（仅 enabled=true）/ `silent`（仅 silent=true），与本文表格一致；
+  - `enable_pending_compact()` 启用历史 pending 时，`tokens_after` 估算包含 tail 事件（`compact_handler.py:176`）；`compact()` 写入时无 tail，仅估算 summary 本身（`compact_handler.py:296-303`）；
+  - `_notify()` 全异步：`await self.bus.publish_outbound(msg)`（`compact_handler.py:410`），无需 `run_coroutine_threadsafe`；
+  - `to_openai_messages()` 中 `context_compact(enabled=True)` 触发 `_flush_tool_calls()` + `_take_reasoning()` 后清空 messages，注入 `[历史上下文摘要]\n{summary}` 作为 user 消息起点（`session/manager.py:596-614`）；
+  - `head` 范围：从上一个 `enabled=true` 的 compact 之后全量；`get_cursor_index()` 返回「上一条已启用 compact 的下一位」（`compact_handler.py:538-543`）；
+  - `get_pending_compact_index()` 查找 `enabled=False` 的 pending（`compact_handler.py:554-562`）；
+  - LLM 摘要走 `_run_compact_llm` 直调，无 subagent、无 raw 模式，prompt 模板 `SUMMARY_TEMPLATE` + 系统提示 `COMPACT_LLM_SYSTEM_PROMPT`（`compact_handler.py:46-92`）；
+  - 摘要基本有效性校验：非空 + 长度 ≥ 200 + 包含 `## `（`compact_handler.py:381-383`）；
+  - `_serialize_events` 把事件流转成 `[User]: ...` / `[Assistant]: ...` / `[Assistant reasoning]: ...` / `[Assistant tool call]: ...` / `[Tool result]: ...` 等文本（`compact_handler.py:423-488`），tool_result 默认截断 2000 字符。

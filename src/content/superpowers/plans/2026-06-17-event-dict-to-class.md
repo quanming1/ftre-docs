@@ -1,5 +1,7 @@
 # Event Dict → Class 改造计划
 
+> **历史计划**：本改造已落地。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 已使用 `@dataclass` 类体系，但实际子类为 12 个（含 `UserMessageEvent`、`AssistantMessageEvent`、`AssistantMessageCompleteEvent` 等），且 `message`/`message_complete` 已重命名为 `assistant_message`/`assistant_message_complete`。本文档保留为设计演化参考，具体实现请以当前源码为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将 `AgentEvent = dict` 改为 `@dataclass` 类体系，保持 JSON 序列化兼容。

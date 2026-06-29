@@ -1,5 +1,7 @@
 # Tool 返回 AgentEvent 实现计划
 
+> **历史计划**：`UserMessageEvent`、`ToolResult.event` 及 `react_runner` 的注入逻辑已落地。但图片读取能力没有拆分为独立的 `see_img` 工具，而是合并进了 `ftre/src/ftre/tools/read.py`（图片路径自动走视觉分支并返回 `UserMessageEvent`）。本文档保留为设计演化参考，具体实现请以当前源码为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Tool 可返回 `AgentEvent` 实例（不仅是 `str`），react_runner 检测后将其注入 memory 作为 user message，LLM 下一轮即可"看到"图片等多模态内容。

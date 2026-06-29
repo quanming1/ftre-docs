@@ -1,5 +1,7 @@
 # ChatInput 悬浮模式 Implementation Plan
 
+> **历史计划**：本改造已落地。当前 `ftre-desktop/packages/renderer/src/features/chat/ChatView.tsx` 中 `ChatMessageList` 使用 `pb-[180px]` 底部 padding，`ChatInput` 通过 `absolute bottom-0 left-0 right-0` 悬浮在消息列表上方，只读 Channel 提示同样采用绝对定位。本文档保留为设计演化参考，具体实现请以当前源码为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** ChatInput 从固定底部改为悬浮在 ChatMessageList 上，消息可以滚到输入框下方。

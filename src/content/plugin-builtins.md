@@ -2,15 +2,11 @@
 
 ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`。Gateway 启动时 `PluginManager.load_all()` 先加载内置插件，再扫描 `~/.ftre/plugins/` 外部目录。
 
-> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中注册为普通指令。自动上下文管理采用 `precompact_threshold`(0.5) 单阈值：idle/usage 后台路径直接 `compact(enabled=true)`，用户输入路径在 `_step_compact` 中标记 `need_compact` 后在 `_run_async()` 中执行压缩。
+> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中注册为普通指令。自动上下文管理采用 `precompact_threshold`(0.5) 单阈值：idle/usage 后台路径直接 `compact(enabled=true)`，用户输入路径在 `_step_compact` 中标记 `need_compact` 后在 `_run_async()` 中执行压缩；自动压缩的静默行为取 `agents.defaults.context.silent`，默认 `true`。
 
 ---
 
 ## 1. title_gen — 自动生成会话标题
-
-> ⚠️ 当前本地 `title_gen.py` 与现版 `ftre-agent-core` LLM API 不兼容，标题生成实际不可用；需修复插件后才可使用。后端核心配置里虽然已支持 `agents.defaults.title_generation`（会构造 `AgentConfig.title_llm`），但该本地插件目前无法正确调用它。
-
-设计意图是在首条用户消息进入 `before_messages_build` 时异步调用 LLM 生成标题，写入 DB。后端不会为标题变更下发专用事件；前端在会话列表刷新后展示新标题。当前插件的 `_extract_text()` 从结构化 part 取文本时使用 `text` 字段（`part.get("text", "")`），而后端 `_text_value` 优先读取 `text`、兜底读取 `data`；桌面前端发送的结构化文本 part 使用 `text` 字段（`{ type: "text", text: "..." }`），因此 `_extract_text` 对前端发送的文本 part 可以正常取到文本。但 `_generate_title()` 方法存在两个 bug：（1）尝试从 `ftre_agent_core.llm` 导入 `LLMResponse` 和 `StreamDelta`，但当前 `ftre-agent-core` 不存在这两个类（只导出 `LLMHandler` / `TextDelta` / `ReasoningDelta` / `ToolInputDelta` / `ToolCall` / `StepFinish` 等），导致 `ImportError`；（2）`LLMHandler.stream()` 是 async generator（`async def stream`），而 `_generate_title()` 在同步 worker 线程中使用 `for item in handler.stream()` 尝试迭代，async generator 不支持同步 `for` 循环，会触发 `TypeError: 'async_generator' object is not iterable`。`ImportError` 先于 `TypeError` 发生，因此标题生成对所有内容类型都完全失效（`_spawn_title_generation` 的 worker 线程会捕获异常、记录日志后返回）。这是已知的代码 bug：`_generate_title` 应改用当前 `LLMHandler.stream()` 产出的 `TextDelta` 等事件类型，并使用 `asyncio.run()` 或 `loop.run_until_complete()` 包装 async generator 的迭代。
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
@@ -20,11 +16,13 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 **触发条件：** events 为空（首次对话）+ session 无 title。
 
+**实现说明：** 插件在 `before_messages_build` 时判断首条消息，随后在独立 worker 线程中异步调用 LLM 生成标题。优先使用 `agents.defaults.title_generation` 配置的专用模型，未配置则回退到主 LLM。生成结果经清洗后写入 session 的 `title` 字段，前端通过会话列表刷新展示新标题。
+
 ---
 
 ## 2. context_govern — 上下文治理
 
-在 `before_messages_build` 阶段对事件流做四项修复 + AGENTS.md 注入。
+在 `before_messages_build` 阶段对事件流做四项修复 + AGENTS.md 注入 + 用户自定义提示词注入。
 
 ### 修复能力
 
@@ -45,6 +43,16 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 </AGENTS_RULE>
 ```
 
+### 用户自定义提示词注入
+
+如果 `config.json` 的 `agents.defaults.user_prompt` 不为空，将其内容以 `<USER_CUSTOM_PROMPT>` 标签注入 system_prompt 末尾：
+
+```xml
+<USER_CUSTOM_PROMPT desc="以下是用户在客户端设置的自定义提示词，代表用户的个人偏好与额外要求，请遵守">
+...用户自定义提示词内容...
+</USER_CUSTOM_PROMPT>
+```
+
 ---
 
 ## 3. skill — Skills 能力加载
@@ -58,7 +66,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 **工作原理：**
 
 - `setup()` 时注册 `loadSkill` 工具（Tool 类），Agent 可以调用它按需读取 Skill 完整内容
-- `before_messages_build` 时扫描所有 Skill，提取名称和描述，以 `<skills>` 标签注入 system_prompt
+- `before_messages_build` 时扫描所有 Skill，提取名称和描述，以 `<skill_list>` 标签注入 system_prompt
 - Agent 根据用户需求自主判断是否需要调用 `loadSkill`，同一个 Skill 只加载一次
 
 ---
@@ -86,3 +94,15 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 ## 通用约定
 
 这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`mcp` 注册 HTTP 路由和 MCP 工具，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/*.py` 完整核对，描述准确。
+  - 4 个内置插件（`title_gen` / `context_govern` / `skill` / `mcp`）与 `ftre/src/ftre/plugin/builtin/` 目录一致；
+  - `context_govern` 六项能力（孤立事件清理 / tool_call 去重 / 相邻性修复 / 悬挂 tool_result / AGENTS.md 注入 / 用户自定义提示词注入）与 `context_govern.py:23-46` 一致；
+  - `AGENTS_RULE` 与 `USER_CUSTOM_PROMPT` 标签的 XML 包裹格式与 `context_govern.py:50-97` 一致；
+  - `title_gen` 默认配置（`DEFAULT_INPUT_TRUNCATE = 1000`、`DEFAULT_MAX_CHARS = 40`、`DEFAULT_SYSTEM_PROMPT`）与 `title_gen.py:24-29` 一致；通过 `before_messages_build` 判断首条消息（`ctx.events` 为空 + session 无 title），worker 线程中调用 `LLMHandler.stream` 生成标题；
+  - `mcp` 插件在 `setup()` 中调用 `self.api.append_system_prompt(...)` 注入 MCP 工具说明、`self.api.register_router(self._build_router())` 注册 `/mcp` 前缀路由（最终路径为 `/api/mcp`）、`loop.call_soon_threadsafe(asyncio.create_task, self._start_connections())` 异步启动 MCP 连接；
+  - MCP `local` / `remote` 配置校验在 `_validate_mcp_server`（`mcp_plugin.py:194-235`）；`timeout` 默认 `30_000` ms（即 30 秒），与代码一致；
+  - `skill` 插件默认目录 `~/.ftre/skills`，支持 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 三种形式（`skill_plugin.py:268-270,333-335`）；
+  - 上下文压缩功能已迁出插件：原 `context_compact.py` 插件不再存在；`CompactHandler` 在 `ftre/src/ftre/agent/compact_handler.py`；`/compact` 在 `AgentLoop._register_commands()` 注册为普通指令。

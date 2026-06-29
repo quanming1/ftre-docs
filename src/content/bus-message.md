@@ -71,7 +71,7 @@ BusMessage 的主要构造入口：
 |---------|------|
 | `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_message`；所有入站消息统一走 `kind="user_message"`（前端 cancel 帧在 ws_channel 层已转为 `/cancel` user_message） |
 | `CronScheduler._tick()` | 直接构造 BusMessage（`from_channel=self.default_channel`，默认 `"cron"`）并调用 `bus.publish_inbound()` 投递 `user_message`，不经过 `Channel.receive()` |
-| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_message` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`assistant_message_complete` / `reasoning_complete` / `tool_call` / `tool_result` / `user_message` / `usage_update` / `error` / `done` 会按 `_PERSISTENT_CLASSES` 白名单写入 DB（`assistant_message`、`reasoning`、`tool_call_streaming` 流式增量不持久化；`retry` 不在白名单中，同样不持久化；`tool_cancel_requested` / `tool_cancelled` 无对应事件类，不产出也不持久化）。`_run_async()` 在主事件循环内直接 await 执行，不需要 `run_in_executor` 或 `asyncio.run()` |
+| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_message` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`assistant_message_complete` / `reasoning_complete` / `tool_call` / `tool_result` / `user_message` / `usage_update` / `error` / `done` 会按 `_PERSISTENT_CLASSES` 白名单写入 DB（`assistant_message`、`reasoning`、`tool_call_streaming` 流式增量不持久化；`retry` 不在白名单中，同样不持久化；`tool_cancel_requested` / `tool_cancelled` 无对应事件类，不产出也不持久化）。`_run_async()` 在主事件循环内直接 await 执行，不需要 `run_in_executor` 或 `asyncio.run()`。取消或异常导致 `AgentLoop._run_async()` 自行补发的 `done` 只发送 outbound，不走 `_PERSISTENT_CLASSES` 入库路径 |
 | `AgentLoop._publish_session_status_async()` | 构造 `global_event(session_status)`，直接 `await bus.publish_outbound()` |
 | `AgentLoop._cmd_compact()` | `/compact` 指令内部构造 `global_event(session_status)`（running / idle），直接 `await self._publish_session_status_async()` |
 | `send_message._do_notify()` | 构造 `agent_event(external_message)` |
@@ -148,7 +148,7 @@ WebSocketChannel.send()
 
 > **注意**：后端 global_event 基础设施已完整实现；前端当前会消费 `session_status`，一方面直接更新对应 chat bucket 的 `isBusy` / `error` / `retryState`，另一方面把它作为触发信号调用 `useSession.loadAllSessions()`。但刷新会话列表得到的 HTTP `running` 字段只覆盖普通 ReActAgent 执行态，不能恢复 `/compact` 等不创建 `_active_agents` 的命令态。
 
-**并发丢弃不发事件**：`AgentLoop` 的并发防御（同 session 已运行时静默丢弃新 `user_message`）不改变运行态，因此不发 `session_status`。
+**并发串行化不发事件**：`AgentLoop._dispatch()` 对普通消息使用 per-session `asyncio.Lock` 串行化——同一 session 的第二条消息会在锁上等待，而非被丢弃，因此不改变运行态，也不发 `session_status`。
 
 ## metadata 字段
 
@@ -169,3 +169,12 @@ WebSocketChannel.send()
 | `channel_id` | string | `ws_channel.send()` | 目标 Channel ID，即 `msg.to_channel`；普通 ws 消息为 `"ws"`，`global_event` 为 `"*"` |
 | `session_id` | string | `ws_channel.send()` | 目标 Session ID，即 `msg.to_session`；普通 session 消息为具体 session_id，`global_event` 为 `"*"` |
 | `frame_id` | string | 上行 metadata 透传（AgentLoop echo） | 客户端上行帧 `id`，经 AgentLoop echo 透传回前端用于占位去重 |
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre/src/ftre/bus/message.py` / `bus.py` / `channel/manager.py` 核对，描述准确。
+  - `BusMessage` 字段（`id` / `type` / `from_channel` / `from_session` / `to_channel` / `to_session` / `data` / `metadata` / `timestamp`）与 `bus/message.py:17-36` 一致；`id` 由 `uuid.uuid4().hex[:16]` 生成（前 16 位 hex）；
+  - `GLOBAL_CHANNEL = "*"` 与 `GLOBAL_SESSION = "*"` 定义在 `bus/message.py:13-14`；
+  - `MIRROR_TO_WS_CHANNELS = {"cron"}` 定义在 `channel/manager.py:13`，并由 `_dispatch_loop` 在 cron channel 分发后镜像到 ws；
+  - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:311-328`），不再产生 `type="cancel"` 的 BusMessage；
+  - `_PERSISTENT_CLASSES` 不包含 `assistant_message` / `reasoning`（流式增量）/ `retry` / `tool_cancel_requested` / `tool_cancelled`，这些类型不入库。

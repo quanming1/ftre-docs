@@ -85,6 +85,7 @@ cmd.register("/compact", handler, description="压缩当前会话上下文")    
 **派发：**
 - `try_dispatch_system(data)` — 从 data 提取文本，匹配系统级指令并执行。返回 `True` 表示命中
 - `try_dispatch(data)` — 从 data 提取文本，匹配普通级指令并执行。返回 `True` 表示命中
+- `dispatch_system(raw, meta=None)` — 低级 API，直接传文本匹配系统级指令（与 `dispatch` 对称）
 - `dispatch(raw, meta=None)` — 低级 API，直接传文本匹配普通级指令
 
 handler 通过 `ctx.meta` 回写结果。handler 可同步可异步（`async def`），异步 handler 会被 `await`。
@@ -159,10 +160,14 @@ self.command_manager.register(
 
 **无参指令直接发送：** `args_hint` 为空的指令（如 `/cancel`），选中后直接替换为对应指令并发送。有参指令填入输入框等待用户补全。
 
-**手动压缩入口：** 当前后端已实现的手动压缩入口是发送 `/compact` 指令。桌面端 `ChatHeader` 中的归档/压缩菜单调用 `triggerCompaction()`，会请求 `POST /api/sessions/{id}/compact`；后端 `routes.py` 当前没有该路由，因此该 HTTP 入口尚未接通，会失败。
+**手动压缩入口：** 发送 `/compact` 指令是后端可靠的手动压缩入口。后端 `routes.py` 当前**没有**实现 `POST /api/sessions/{id}/compact` 路由；前端 ChatHeader 的「归档会话」菜单调用该路由但后端未实现，无法生效；如需手动压缩，请直接发送 `/compact` 消息。
 
 ---
 
 ## 扩展
 
 新指令可在 `AgentLoop._register_commands()` 中注册。系统级指令使用 `system=True` 参数，普通级指令默认。插件侧可通过 `self.api.command_manager.register()` 注册普通级指令（当前 `command_manager` 已注入 `PluginManager`，插件注册的指令可正常生效）。
+
+## 校对记录
+
+- **2025-06-26**：补全 `CommandManager` 低级 API 描述。新增 `dispatch_system(raw, meta=None)`（系统级版本），与 `dispatch(raw, meta=None)`（普通级版本）对称。源码依据：`ftre/src/ftre/command/manager.py:100-103`。

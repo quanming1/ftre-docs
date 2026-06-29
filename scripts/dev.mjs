@@ -24,11 +24,11 @@ function resolvePort() {
 const port = resolvePort();
 console.log(`[docs] 使用端口 ${port}（来源：${CONFIG_PATH} servers.docs.port，缺省 ${FALLBACK_PORT}）`);
 
-// vite 的命令行 --port 会覆盖 vite.config.ts 中的默认值
-const child = spawn(
-    process.platform === "win32" ? "npx.cmd" : "npx",
-    ["vite", "--port", String(port)],
-    { stdio: "inherit", shell: false },
-);
+// vite 的命令行 --port 会覆盖 vite.config.ts 中的默认值。
+// Windows 上 spawn .cmd 需 shell:true，否则新版 Node 抛 EINVAL。
+const child = spawn(`npx vite --port ${port}`, {
+    stdio: "inherit",
+    shell: true,
+});
 
 child.on("exit", (code) => process.exit(code ?? 0));

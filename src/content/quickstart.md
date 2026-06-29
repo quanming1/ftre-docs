@@ -12,14 +12,16 @@ ftre gateway
 ```
 
 Gateway 启动后默认监听：
-- WebSocket：`ws://127.0.0.1:19470/`
-- HTTP API：`http://127.0.0.1:19470/api/`
+- WebSocket：`ws://127.0.0.1:48650/`
+- HTTP API：`http://127.0.0.1:48650/api/`
 
 > `ftre` 当前 `pyproject.toml` 声明 `requires-python = ">=3.11"`；本工作区通常使用 Python 3.12 运行。
 >
+> 端口可通过 `~/.ftre/config.json` 的 `servers.gateway.port` 调整，缺省 `48650`。前端 dev 服务默认端口为 `48651`（由 `servers.frontend.port` 控制）。
+>
 > 注意：`ftre-agent-core` 当前 LLM 适配源码直接导入 `openai.AsyncOpenAI`，但 `pyproject.toml` 仍只声明了 `litellm` 依赖；如果全新环境按上述命令安装后缺少 `openai` 包，需要先补装或修正依赖声明。
 
-当前 Gateway 监听地址使用 `WebSocketChannel` 的硬编码默认值（`host="0.0.0.0"`、`port=19470`），后端未从 `config.json` 的 `servers` 配置读取。
+Gateway 默认从 `~/.ftre/config.json` 的 `servers.gateway` 读取 host / port，缺省 `127.0.0.1:48650`。
 
 ## 启动客户端
 
@@ -29,7 +31,7 @@ pnpm install
 pnpm dev
 ```
 
-当前桌面前端开发服务由 `packages/renderer/vite.config.ts` 配置，监听 `127.0.0.1:50000`；根目录 `pnpm dev` 脚本会等待 `http://127.0.0.1:50000` 可用后启动 Electron，Electron 窗口实际加载 `http://localhost:50000`。
+当前桌面前端开发服务由 `packages/renderer/vite.config.ts` 配置，缺省监听 `127.0.0.1:48651`；实际端口由 `scripts/dev.mjs` 解析 `~/.ftre/config.json` 的 `servers.frontend.port` 后通过 `FTRE_FRONTEND_PORT` 环境变量注入。
 
 ## 配置文件
 
@@ -64,3 +66,14 @@ pnpm dev
 ```
 
 > `api_protocol` 会被后端读取并传给 `_build_model_name(model_id, protocol)`，但当前 `_build_model_name()` 直接返回 `model_id`，不会据此拼接前缀；`load_config()` 构造出的 `LLMConfig.api_type` 仍使用默认 `"completions"`，实际走 OpenAI Chat Completions 流式适配。
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre/start.py` / `E:\ftre\pyproject.toml` / `E:\ftre-agent-core\pyproject.toml` 核对，描述准确。
+  - `py -m pip install -e .` 安装 `E:\ftre-agent-core` 与 `E:\ftre` 两个仓库的步骤与各自 `pyproject.toml` 一致；`ftre` 入口通过 `[project.scripts] ftre = "ftre.main:main"` 注册；
+  - `ftre gateway` 与 `ftre/src/ftre/main.py:198-203` 一致；
+  - WebSocket 监听 `127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致（缺省值 `48650`）；
+  - HTTP API 监听 `http://127.0.0.1:48650/api/`（`/api` 前缀在 `ws_channel.py:148,153` 注入）；
+  - `requires-python = ">=3.11"` 与两个 `pyproject.toml` 一致；当前工作区通常使用 Python 3.12；
+  - 前端 dev 服务由 `E:\binn\ftre-desktop\scripts\dev.mjs` 启动，端口由 `resolveFrontendPort()` 从 `~/.ftre/config.json` 的 `servers.frontend.port` 读取并通过 `FTRE_FRONTEND_PORT` 环境变量注入 `packages/renderer/vite.config.ts`；
+  - **依赖不一致提醒保留**：`ftre-agent-core` 源码直接使用 `openai.AsyncOpenAI`（`llm/completion.py:272`），但其 `pyproject.toml` 只声明 `litellm` 依赖；全新环境按本文命令安装后可能缺少 `openai` 包，需要补装或修正依赖声明。

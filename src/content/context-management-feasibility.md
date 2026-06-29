@@ -13,7 +13,7 @@
 具体目标（历史方案，不是当前代码状态）：
 - ✅ 只保留 LLM 直调作为唯一摘要方式（砍 subagent、砍 raw）
 - ✅ 逻辑上只保留一个实际触发水位（但当前代码层面仍保留两个配置字段：`precompact_threshold` / `compact_threshold`）
-- ✅ 自动压缩 `silent=true`（前端不渲染），手动 `/compact` `silent=false`（前端渲染气泡）
+- ✅ 自动压缩默认 `silent=true`（由 `agents.defaults.context.silent` 控制，前端不渲染），手动 `/compact` `silent=false`（前端渲染气泡）
 - ✅ 暂不考虑 LLM 失败兜底，失败了下次再触发再试
 - ✅ 游标机制、L1 prune、摘要并入（anchored）保留不变
 
@@ -102,7 +102,7 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 ```
 一轮对话结束 → done / usage_update
                     └─ 检查水位 ≥ precompact_threshold(0.5)
-                        ├─ 是 → LLM 直调摘要 → 写 context_compact(enabled=true, silent=true)
+                        ├─ 是 → LLM 直调摘要 → 写 context_compact(enabled=true, silent=config.context.silent，默认 true)
                         └─ 否 → 不压
 
 用户发下一轮 → _step_compact 水位检查
@@ -110,7 +110,7 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
     └─ 水位 ≥ precompact_threshold
          └─ _run_async 先尝试 enable_pending_compact()
               ├─ 命中历史 pending → 启用为 enabled=true 后正常回复
-              └─ 无 pending（当前常态） → LLM 直调摘要(enabled=true, silent=true) → 正常回复
+              └─ 无 pending（当前常态） → LLM 直调摘要(enabled=true, silent=config.context.silent，默认 true) → 正常回复
 
 用户手动 /compact → 先尝试 enable_pending_compact()，无 pending 则 LLM 直调摘要(enabled=true, silent=false)
 ```
@@ -149,7 +149,7 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 - 方案 B：LLM 失败时直接截断最旧的 tool_result（轻量兜底，不走完整 raw_archive）
 - 方案 C：让 LLM API 更可靠（超时重试 1 次）
 
-**当前决策**：暂不实现，失败了下次再触发再试。如果后续发现 LLM 失败率高，加方案 B。
+**当前决策（历史）**：暂不实现，失败了下次再触发再试。如果后续发现 LLM 失败率高，加方案 B。当前源码已额外加入后台 idle/usage 路径的不可重试 LLM 错误冷却：`auth_error` / `bad_request` / `content_filter` 会让该 session 后台压缩进入 300 秒冷却期；用户输入路径和手动 `/compact` 不受该冷却限制。
 
 ### 5.2 水位突然暴涨（用户粘贴超大文件）
 
@@ -212,3 +212,9 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 - `enabled=false` / pending 启用逻辑仍保留在代码里用于兼容，但当前没有新写入路径。
 
 因此，本文适合作为**设计演化背景**阅读，不应再作为实现说明引用；实现说明请看 `context-management.md`。
+
+## 校对记录
+
+- **2025-06-26**：作为历史方案记录保留，本文档描述的简化方向（删除 raw / subagent / 双阈值 / 升级机制等）与代码历史演进路径吻合。当前实现的真实情况已在 `context-management.md` 中详细说明，本文档不再作实现说明使用；
+- 文中列出的「需删代码约 260 行」「风险点：`raw_archive_chunk` 被 `_run_compact_llm` 复用」等条目，是历史分析时点的状态，已不反映当前实现；当前实现虽已简化为单一 LLM 直调摘要，但配置层仍保留 `precompact_threshold` 与 `compact_threshold` 两个字段，且 `compact_handler.py` 的 `compact()` 方法 docstring 中仍保留了"60% 无 pending 时"的旧说法（对应源码 line 219），实际调用路径应以 `context-management.md` 中按源码核对后的描述为准；
+- 本次校对已补充上述说明，避免把当前源码中的历史注释误读为真实运行逻辑。

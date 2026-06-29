@@ -47,33 +47,6 @@ Skill 是 ftre 的可复用能力模块——把工作流程、领域知识、�
 
 同一 Skill 在当前对话中只加载一次，避免重复读取。
 
-## 内置 Skill
-
-### frontend-design
-
-创建高质量、生产级前端界面。触发场景：用户要求构建 Web 组件、页面或应用。
-
-- 产出创意性强、风格鲜明的代码
-- 避免通用 AI 美学风格
-- 支持完整页面和独立组件
-
-### mcp-guide
-
-指导 MCP 配置、接入与排错。
-
-- 解释 MCP 协议与 ftre 集成
-- 配置 local stdio / remote HTTP 服务器
-- 常见错误排查指南
-- 推荐 MCP 服务器列表
-
-### skill-creator
-
-指导创建新的 Skill。
-
-- Skill 文件规范
-- 内容结构最佳实践
-- 示例模板
-
 ## 编写自己的 Skill
 
 ### 最小 Skill
@@ -118,11 +91,11 @@ Agent 可在 SKILL.md 中引用 `references/` 下的文档路径。
 
 ## 系统提示词注入
 
-当前 Skill 的管理与读取能力由后端内置 API/工具提供：
-- HTTP API 通过 `ftre/api/skill.py` + `ftre/api/routes.py` 读取 `~/.ftre/skills/`
+当前 Skill 的管理与读取能力由后端内置插件/工具提供：
+- HTTP API 通过内置 `skill` 插件（`plugin/builtin/skill_plugin.py`）注册 `/api/skills` CRUD 路由，底层文件 IO 由 `ftre/api/skill.py` 提供
 - Agent 侧通过 `loadSkill` 工具按需读取完整内容
 
-同时，当前后端源码中的注释仍明确约定：Skill 的描述会被插件注入到 system prompt，并提供 `loadSkill` 工具按需读取完整内容（见 `ftre/api/routes.py` 与 `ftre/api/skill.py` 中的说明）。因此可以确认的运行时设计是：
+因此可以确认的运行时设计是：
 - Skill 摘要会进入系统提示词，供 Agent 判断是否需要加载；
 - Skill 正文在需要时通过 `loadSkill` 读取；
 - 前端的 Skill 管理 UI 走的是同一套本地文件存储。
@@ -147,5 +120,16 @@ Skill 文件保存在 ~/.ftre/skills/
 | 本质 | 知识/流程 Markdown | 工具服务器协议 |
 | 存储 | `~/.ftre/skills/` | `config.json` mcp 段 |
 | 扩展方向 | 告诉 Agent 怎么做 | 给 Agent 新工具 |
-| 加载时机 | 按需 / 自动匹配 | 启动时连接 |
+| 加载时机 | 按需 / 自动匹配 | 启动时连接；配置文件或 API 变更可热重载 |
 | 热更新 | 改文件即可 | 改配置自动重连 |
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/skill_plugin.py` / `ftre/src/ftre/api/skill.py` 核对，描述准确。
+  - Skill 三种文件形式 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 与 `skill_plugin.py:268-270,333-335` 一致；
+  - `loadSkill` 工具由 `skill_plugin.py:252-296` 中 `create_load_skill_tool(skills_dir, disabled_skills)` 创建并通过 `self.api.tool_registry.register(...)` 注册到 Agent 工具集；
+  - `<skill_list>` 标签注入 system_prompt 的实现见 `skill_plugin.py:225-238`；
+  - HTTP API 路由（`/api/skills` 系列，包括 `GET /api/skills`、`GET /api/skills/{name}`、`POST /api/skills`、`PUT /api/skills/{name}`、`DELETE /api/skills/{name}`、`PATCH /api/skills/{name}/toggle`）由 `skill_plugin.py:73-...` 通过 `APIRouter(prefix="/skills")` 注册，最终路径为 `/api/skills*`；
+  - `disabled_skills` 通过 `config.json` 的 `disabled_skills` 数组管理，`PATCH /api/skills/{name}/toggle` 切换；
+  - YAML frontmatter：可选手写；`POST /api/skills` 创建时模板自动生成 `name` + `description`；`extract_description()` 优先从 frontmatter 读取；
+  - 当前源码仓库只定义 Skill 插件、工具和 CRUD API，不包含固定的“内置 Skill”清单；可用 Skill 以运行时 `~/.ftre/skills/` 目录实际内容为准。
