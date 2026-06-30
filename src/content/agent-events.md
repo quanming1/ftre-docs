@@ -1,6 +1,6 @@
 # Agent 事件协议
 
-Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（`isinstance` 检查 + 属性访问），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "data": { ... }}` 走线传输和 DB 存储。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
+Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（`isinstance` 检查 + 属性访问），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "event_id": "<id>", "data": { ... }}` 走线传输；Gateway 入库时会把同一个 `event_id` 写入 `messages.data.event_id`，用于前端统一去重 HTTP history、WS live 和 WS replay。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
 
 本页主要描述 core `ReActAgent` 事件；`AgentLoop`、命令、压缩与工具层注入的扩展事件会在相应章节单独说明。
 
@@ -54,6 +54,7 @@ LLM 流式输出的**增量文本片段**（assistant role）。
 ```json
 {
   "type": "assistant_message",
+  "event_id": "<16-hex>",
   "data": {
     "content": "你好，我是"
   }
@@ -69,14 +70,15 @@ LLM 流式输出的**增量文本片段**（assistant role）。
 ### assistant_message_complete
 
 LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
-
 ```json
 {
   "type": "assistant_message_complete",
+  "event_id": "<16-hex>",
   "data": {
     "content": "你好，我是 ftre，一个 AI 编程助手。"
   }
 }
+```
 ```
 
 **产生**：流式收束时（收到 `StepFinish`）或工具调用前。**仅在 LLM 有文本输出时产出**（`full_text` 非空）；纯工具调用轮次（无文本）不会产出此事件。
@@ -84,46 +86,49 @@ LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
 ### reasoning
 
 支持 thinking 的模型（DeepSeek-R1、千问 QwQ 等）产出的**思考过程文本片段**。
-
 ```json
 {
   "type": "reasoning",
+  "event_id": "<16-hex>",
   "data": {
     "content": "用户想要..."
   }
 }
+```
 ```
 
 **产生**：`ReasoningDelta` 事件。
 
 ### reasoning_complete
 
-一轮思考的**完整文本**。
-
 ```json
 {
   "type": "reasoning_complete",
+  "event_id": "<16-hex>",
   "data": {
     "content": "用户想要一个函数来计算斐波那契数列..."
   }
+}
+```
 }
 ```
 
 **产生**：流式收束或工具调用前，将累积的 reasoning 一次性发出。**仅在有思考内容时产出**（`full_reasoning` 非空）；无 reasoning 的轮次不会产出此事件。
 
 ### tool_call
-
-LLM 返回一个**完整的工具调用**。
-
 ```json
 {
   "type": "tool_call",
+  "event_id": "<16-hex>",
   "data": {
     "id": "call_abc123",
     "name": "bash",
     "arguments": {
       "command": "ls -la"
     }
+  }
+}
+```
   }
 }
 ```
@@ -143,6 +148,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 ```json
 {
   "type": "tool_call_streaming",
+  "event_id": "<16-hex>",
   "data": {
     "tool_calls": [
       {
@@ -173,6 +179,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 ```json
 {
   "type": "tool_result",
+  "event_id": "<16-hex>",
   "data": {
     "id": "call_abc123",
     "name": "bash",
@@ -210,6 +217,7 @@ LLM 返回的 **Token 用量**。
 ```json
 {
   "type": "usage_update",
+  "event_id": "<16-hex>",
   "data": {
     "usage": {
       "prompt_tokens": 1200,
@@ -252,6 +260,7 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 ```json
 {
   "type": "error",
+  "event_id": "<16-hex>",
   "data": {
     "message": "认证失败",
     "code": "auth_error"
@@ -505,6 +514,7 @@ _user_message 到达 AgentLoop_
 ```json
 {
   "type": "user_message",
+  "event_id": "<16-hex>",
   "data": {
     "content": [{"type": "image_file", "path": "C:/Users/.../.ftre/assets/images/screenshot.png", "mime_type": "image/png"}],
     "metadata": {"hide": true}
@@ -521,5 +531,5 @@ _user_message 到达 AgentLoop_
   - `tool_result.status` 实际取值（`completed` / `failed` / `cancelled`）与 `tool_handler.py` 中 `status=` 调用一致；
   - `tool_call_streaming` 仅含 `id` / `name` / `arguments_delta`（无 `index`）与 `react_runner.py:471-477` 中 `tool_call_streaming_event([{...}])` 构造一致；
   - `usage_update` 在流循环内产出（`react_runner.py:495`），`assistant_message_complete` 在流循环后产出，因此 `usage_update` 始终早于 `assistant_message_complete`；
-  - `react_runner` 两阶段写入（先所有 `tool_result`，再统一追加 `UserMessageEvent`）与 `react_runner.py:660-686` 一致；
-  - `format_assistant_message` 始终输出 `reasoning_content` 字段（`reasoning.py:35`），与 OpenAI messages 重构一致。
+  - `react_runner` 两阶段写入（先所有 `tool_result`，再统一追加 `UserMessageEvent`）与 `react_runner.py:658-689` 一致；
+  - `format_assistant_message` 始终输出 `reasoning_content` 字段（`reasoning.py:34`），与 OpenAI messages 重构一致。

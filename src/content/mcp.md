@@ -162,9 +162,9 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
 ## 校对记录
 
 - **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/mcp_plugin.py` / `ftre/src/ftre/mcp/manager.py` 核对，描述准确。
-  - `local` / `remote` 类型配置字段（`type` / `command` / `environment` / `disabled` / `timeout`；`remote` 用 `url` / `headers` 替代 `command` / `environment`）与 `_validate_mcp_server`（`mcp_plugin.py:194-235`）一致；启动解析器 `parse_mcp_config()` 还兼容 `enabled: false` 作为禁用写法；
+  - `local` / `remote` 类型配置字段（`type` / `command` / `environment` / `disabled` / `timeout`；`remote` 用 `url` / `headers` 替代 `command` / `environment`）与 `_validate_mcp_server`（`mcp_plugin.py:194-237`）一致；启动解析器 `parse_mcp_config()` 还兼容 `enabled: false` 作为禁用写法；
   - `timeout` 默认 `30_000` ms（30 秒），文档示例中的 `60000`（60 秒）仅为自定义示例；
-  - MCP 工具命名格式 `mcp__{server}__{tool}` 与 `mcp_plugin.py:38-42` 中 `append_system_prompt` 注入内容一致；
-  - MCP CRUD 路由（`GET/POST /api/mcp`、`PATCH/DELETE /api/mcp/{name}`）由 `mcp_plugin.py:67-154` 通过 `APIRouter(prefix="/mcp")` 注册；`WebSocketChannel` 在 `ws_channel.py:153` 统一为插件路由器添加 `/api` 前缀，最终路径为 `/api/mcp*`；
+  - MCP 工具命名格式 `mcp__{server}__{tool}` 与 `mcp_plugin.py:37-42` 中 `append_system_prompt` 注入内容一致；
+  - MCP CRUD 路由（`GET/POST /api/mcp`、`PATCH/DELETE /api/mcp/{name}`）由 `mcp_plugin.py:67-154` 通过 `APIRouter(prefix="/mcp")` 注册；`WebSocketChannel` 在 `ws_channel.py:269` 统一为插件路由器添加 `/api` 前缀，最终路径为 `/api/mcp*`；
   - config watcher 与 3 秒兜底轮询在 `McpManager.start_config_watcher()` 中实现；
   - 前端设置入口（标题栏 🔌 按钮 + `SettingsDialog` 的 `section: "mcp"`）与桌面端 UI 描述一致。

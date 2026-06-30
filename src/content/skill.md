@@ -126,9 +126,9 @@ Skill 文件保存在 ~/.ftre/skills/
 ## 校对记录
 
 - **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/skill_plugin.py` / `ftre/src/ftre/api/skill.py` 核对，描述准确。
-  - Skill 三种文件形式 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 与 `skill_plugin.py:268-270,333-335` 一致；
-  - `loadSkill` 工具由 `skill_plugin.py:252-296` 中 `create_load_skill_tool(skills_dir, disabled_skills)` 创建并通过 `self.api.tool_registry.register(...)` 注册到 Agent 工具集；
-  - `<skill_list>` 标签注入 system_prompt 的实现见 `skill_plugin.py:225-238`；
+  - Skill 三种文件形式 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 与 `skill_plugin.py:267-271,332-336` 一致；
+  - `loadSkill` 工具由 `skill_plugin.py:252-297` 中 `create_load_skill_tool(skills_dir, disabled_skills)` 创建并通过 `self.api.tool_registry.register(...)`（`skill_plugin.py:56`）注册到 Agent 工具集；
+  - `<skill_list>` 标签注入 system_prompt 的实现见 `skill_plugin.py:237-248`；
   - HTTP API 路由（`/api/skills` 系列，包括 `GET /api/skills`、`GET /api/skills/{name}`、`POST /api/skills`、`PUT /api/skills/{name}`、`DELETE /api/skills/{name}`、`PATCH /api/skills/{name}/toggle`）由 `skill_plugin.py:73-...` 通过 `APIRouter(prefix="/skills")` 注册，最终路径为 `/api/skills*`；
   - `disabled_skills` 通过 `config.json` 的 `disabled_skills` 数组管理，`PATCH /api/skills/{name}/toggle` 切换；
   - YAML frontmatter：可选手写；`POST /api/skills` 创建时模板自动生成 `name` + `description`；`extract_description()` 优先从 frontmatter 读取；

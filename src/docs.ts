@@ -4,8 +4,8 @@ export interface DocEntry {
   category: string
 }
 
-// 使用 import.meta.glob 让 Vite 在构建时就能静态分析所有 .md 文件
-const mdModules = import.meta.glob<string>('./content/*.md', { query: '?raw', import: 'default', eager: true })
+// 使用 import.meta.glob 让 Vite 在构建时就能静态分析所有 .md 文件（含子目录）
+const mdModules = import.meta.glob<string>('./content/**/*.md', { query: '?raw', import: 'default', eager: true })
 
 function getDocLoader(path: string): (() => Promise<{ default: string }>) {
   const key = `./content/${path}.md`
@@ -38,6 +38,9 @@ export const docs: DocEntry[] = [
 
   // Skill
   { path: 'skill', title: 'Skill 体系', category: 'Skill' },
+
+  // 客户端
+  { path: 'client/session-loading', title: '切换 Session 数据加载', category: '客户端' },
 ]
 
 // 导出 loader map 给 DocPage 使用

@@ -170,4 +170,4 @@ self.command_manager.register(
 
 ## 校对记录
 
-- **2025-06-26**：补全 `CommandManager` 低级 API 描述。新增 `dispatch_system(raw, meta=None)`（系统级版本），与 `dispatch(raw, meta=None)`（普通级版本）对称。源码依据：`ftre/src/ftre/command/manager.py:100-103`。
+- **2025-06-26**：补全 `CommandManager` 低级 API 描述。新增 `dispatch_system(raw, meta=None)`（系统级版本），与 `dispatch(raw, meta=None)`（普通级版本）对称。源码依据：`ftre/src/ftre/command/manager.py:116-122`。

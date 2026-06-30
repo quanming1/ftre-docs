@@ -157,6 +157,7 @@
   "type": "agent_event",
   "data": {
     "type": "<event-type>",
+    "event_id": "<16-hex>",
     "data": { ... }
   },
   "metadata": {
@@ -165,14 +166,15 @@
   }
 }
 ```
-
 | metadata 字段 | 类型 | 说明 |
 |---------------|------|------|
 | `channel_id` | string | 目标 Channel ID，即后端 `BusMessage.to_channel`；普通 ws 消息为 `"ws"`，全局广播为 `"*"` |
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
-| `volatile_seq` | number | 可选。仅出现在未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming`）上。<br><br>**用途：attach 时的 replay/live 去重。** 后端对每个 session 独立维护一个从 1 开始的递增计数器。每次下发一条流式帧就把计数器 +1，写入该帧的 `volatile_seq`。<br><br>**为什么需要去重：** 客户端 attach 时，后端同时做两件事：① `replay()` 补发 volatile buffer 中已有的帧（seq=1,2,3）；② live 流继续下发当前正在产生的帧（也带 seq=1,2,3,4...）。attach 瞬间 replays 和 live 会重叠发送 seq=1,2,3 共 3 帧，重复渲染会导致 UI 错乱。<br><br>**去重方式：** 客户端维护一个 `session_id → seen_seq_set` 的 Map。收到带 `volatile_seq` 的帧时，构造 key `"${session_id}:${seq}"`，如果已在 set 中则丢弃；不在则记录并渲染。WS 重连时清空整个 set（替代旧版 `volatile_epoch` 的跨重启保障）。<br><br>**示例（session "ws::s1"）：**<br>1. live 下发：assistant_message seq=1 → 渲染，key "ws::s1:1" 记入 set<br>2. live 下发：assistant_message seq=2 → 渲染，key "ws::s1:2" 记入 set<br>3. 客户端 detach 后再 attach<br>4. replay 补发：assistant_message seq=1 → key "ws::s1:1" **已存在**，丢弃 ← 去重生效<br>5. replay 补发：assistant_message seq=2 → key "ws::s1:2" **已存在**，丢弃<br>6. live 下发：assistant_message seq=3 → 渲染，key "ws::s1:3" 记入 set<br>7. live 下发：assistant_message seq=4 → 渲染 |
+| `event_id` | string | AgentEvent 的稳定事件 ID。core 创建 `AgentEvent` 时生成，WS 下行放在 `data.event_id`，DB 历史记录同步写入 `messages.data.event_id`。前端 reducer 用它统一去重 HTTP history、WS live、WS replay；同一个事件从不同路径到达时只渲染一次。旧历史行没有 `event_id` 时，gateway 启动迁移会用 `messages.id` 回填。 |
 
-**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件，长度不设上限。当客户端 attach 时，先补发这些缓存，再继续接收 live 流。稳定事件到达时（如 `assistant_message_complete`）自动清理对应的流式草稿。
+> **注意区分 `id` 和 `event_id`**：`id` 是 WS 帧 ID，仅用于 `user_message` echo 去重（前端自己发的消息不再渲染第二次）；`event_id` 是事件 ID，用于所有事件的统一去重（HTTP / WS live / WS replay 三路）。两者职责不同，不可混用。
+
+**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件，并短暂保留刚入库的稳定事件（如 `assistant_message_complete` / `tool_call` / `tool_result`）来覆盖 HTTP history 与 WS attach 之间的 race。客户端 attach 时先补发这些缓存，再继续接收 live 流。重复帧由 `event_id` 在前端 reducer 统一去重。
 
 ### 事件类型完整列表
 
@@ -775,7 +777,7 @@
 | GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤；返回 `{sessions, total, limit, offset}`，其中每个 session 附带 `running` 字段；该字段仅表示该 session 是否存在于 `AgentLoop._active_agents` 中，即是否有普通 ReActAgent 正在执行，不包含 `/compact` 等不创建 `_active_agents` 的命令态） |
 | PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
 | DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
-| GET | `/api/sessions/:id/messages` | 拉取该 session 全部历史消息（当前后端不支持分页参数；前端分页加载代码会拼 `limit`/`before_ts`/`after_ts` 到 URL 并读取 `has_more`/`total`，但后端不读取这些查询参数且只返回 `{"messages": [...]}`，因此首屏/分页请求都会被当作全量请求处理，前端因缺少 `has_more` 认为没有更早页；真实用户输入历史事件为 `user_message(metadata.hide=false)`） |
+| GET | `/api/sessions/:id/messages` | 拉取该 session 历史消息（按时间正序）。支持 `limit_turns=N` 按对话轮次返回最近 N 轮（一轮以可见 `user_message` 为界），可选 `before_ts` 游标加载更早消息。带 `limit_turns` 时返回 `{messages, has_more, status}`；不带参数时返回 `{messages, status}`。`status` 为 `idle` / `running` / `compacting`。`has_more` 表示是否还有更早的消息 |
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区（支持 `channel_id` 过滤；默认 `ws`） |
 | GET | `/api/images/{filename}` | 返回 `~/.ftre/assets/images/` 目录下的图片文件，供前端历史消息渲染附件图片；对 `filename` 做 basename 过滤防路径穿越 |
@@ -801,7 +803,8 @@
 
 > 可靠的手动压缩入口是发送 `/compact` 指令。后端 `routes.py` 当前没有 `POST /api/sessions/:id/compact` 路由；前端 ChatHeader 的「归档会话」菜单仍存在，调用该路由但后端未实现，因此实际无法生效。建议使用 `/compact` 指令。
 
-`GET /api/sessions/:id/messages` 返回该 session 全部消息（按时间正序），当前后端不分页；前端代码中保留的 `limit` / `before_ts` / `after_ts` 查询参数会拼到 URL 上，但后端不会读取这些参数，所有请求都会得到全量消息。
+`GET /api/sessions/:id/messages` 返回该 session 消息（按时间正序）。支持 `limit_turns` 参数按对话轮次分页返回最近 N 轮，可选 `before_ts` 游标向前翻页；返回 `has_more` 表示是否还有更早的消息，`status` 为当前会话运行状态（`idle` / `running` / `compacting`）。
+
 
 ## 校对记录
 

@@ -156,7 +156,7 @@ def build_default_tools(..., llm_config=None):
   - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
   - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
   - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
-  - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:362-372` 一致；
+  - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:363-372` 一致；
   - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router` / `append_system_prompt`）与 `ftre/src/ftre/plugin/plugin.py` 一致；
   - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:714-721` 一致；
   - `CompactHandler.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_handler.py` 一致；

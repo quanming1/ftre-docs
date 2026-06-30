@@ -319,7 +319,7 @@ class MyTool(Tool):
   - `PluginManager.__init__` 接受 `command_manager` 参数（`plugin/plugin.py:153`），并在 `_load` 时将其透传给 `FtrePluginApi`（`plugin/plugin.py:226`）；
   - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py:174-211`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
   - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:30-53` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:714-721`）；
-  - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py:67-90` 一致；
+  - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py:63-87` 一致；
   - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具（`tools/registry.py`）；插件同名工具之间在 `ftre.tools.ToolRegistry.register()` 阶段会抛 `ValueError`；
   - `Injected` 注入解析发生在 `ToolRegistry.execute(..., runtime_context=...)` 路径（同步工具），异步工具在 `ToolHandler.run_one()` 直接 `await tool._get_callable()(**ctx.arguments)`，不会自动解析 `Injected`。
 - **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:97-118`。
