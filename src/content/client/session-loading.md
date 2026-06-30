@@ -24,15 +24,6 @@ eventId → data.event_id → id（WS 帧 id）
 
 去重后的 `eventId` 存入 bucket 的 `seenEventIds` Set，后续重复事件直接丢弃。
 
----
-三条来源可能产出同一事件（例如 `tool_call` 既被 HTTP 返回又被 replay 补发）。前端按以下优先级取 `event_id` 去重：
-
-```
-eventId → data.event_id → id（WS 帧 id）
-```
-
-去重后的 `eventId` 存入 bucket 的 `seenEventIds` Set，后续重复事件直接丢弃。
-
 ### WS 事件微批处理
 
 chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
@@ -41,13 +32,26 @@ chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
 - 稳定事件（`tool_call` / `tool_result` / `done` / `error` / `assistant_message_complete` 等）立即 flush 已有批次，然后单独处理。
 
 **为什么需要这个**：replay buffer 下发的是原始流式 delta（可能几十条 `assistant_message`），如果逐条走 `applyEvent` + `mirror()`，React 会用 30+ 次 setState 重渲染，UI 看起来像打字机从零开始回放。微批处理后所有 delta 一次性消费到 bucket，最后一次重渲染时一次性刷新到当前状态。
+
+---
+
+## 情况 1：切换到空闲 Session
+
+**场景**：Session 没有 agent 在运行，所有事件已入库。
+
+```
+用户从 Session B 切到 Session A（空闲）
+│
 ├─ ① clearSessionCache(sessionId)
 │    清空本地 bucket（messages / events / seenEventIds / hasMoreHistory）
 │
 ├─ ② switchTo(sessionId)
 │    chat store 记录 current sessionId，UI 进入 loading 状态
 │
-核心原则：**HTTP 负责历史快照 + 状态初始化，WS replay 负责补齐实时缺口，WS live 负责持续更新，event_id 统一去重，30ms 微批处理避免 replay 打字机回放。**
+├─ ③ HTTP: GET /api/sessions/{sessionId}/messages?limit_turns=5
+│    返回:
+│    {
+│      "messages": [...DB 已有记录...],
 │      "has_more": true / false,
 │      "status": "idle"              ← 后端 is_session_running() = false
 │    }
@@ -118,8 +122,7 @@ chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
        流式事件先收集到 per-session 批次，30ms 后一把 applyEvent + 一次 React 重渲染
        HTTP 已有的（按 event_id 去重命中）直接丢弃
        HTTP 没有的（流式片段）→ 一次性追加到现有 messages 尾部
-    → 此后继续 live 流：
-    → 此后继续 live 流：
+     → 此后继续 live 流：
        tool_call_streaming(arguments_delta) → 追加入 tool call 卡片
        tool_call(bash) → 替换流式 tool 为完整卡片
        tool_result(...) → 追加工具结果
@@ -133,18 +136,11 @@ chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
 - `assistant_message` 会续写到 HTTP 尾部那条 assistant 消息上（`streaming: true`）
 - replay 帧走 30ms 微批处理：所有流式 delta 在窗口结束瞬间一次消费并渲染，UI 不会逐字回放
 
-**涉及代码**：
-- 后端 `ws_channel.py` → `_VolatileReplayBuffer.track()` / `replay()`
-- 前端 `chat.ts` → `applyEvent()`（第 243 行起）→ `tail()` / `ensure()` 流式续写
-- 前端 `chat.ts` → `seenEventIds` 去重（第 224-241 行）
-- 前端 `chat.ts` → `_enqueueWsEvent()` / `_flushWsBatch()`（30ms 微批处理）
-- replay buffer 补发的帧和 HTTP 已加载的帧可能重叠，靠 `event_id` 去重
-- `assistant_message` 会续写到 HTTP 尾部那条 assistant 消息上（`streaming: true`）
-
-**涉及代码**：
-- 后端 `ws_channel.py` → `_VolatileReplayBuffer.track()` / `replay()`
-- 前端 `chat.ts` → `applyEvent()`（第 243 行起）→ `tail()` / `ensure()` 流式续写
-- 前端 `chat.ts` → `seenEventIds` 去重（第 224-241 行）
+ **涉及代码**：
+ - 后端 `ws_channel.py` → `_VolatileReplayBuffer.track()` / `replay()`
+ - 前端 `chat.ts` → `applyEvent()`（第 243 行起）→ `tail()` / `ensure()` 流式续写
+ - 前端 `chat.ts` → `seenEventIds` 去重（第 224-241 行）
+ - 前端 `chat.ts` → `_enqueueWsEvent()` / `_flushWsBatch()`（30ms 微批处理）
 
 ---
 
@@ -163,26 +159,25 @@ chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
 │    DB 里还没有任何消息（user_message 和后续事件都还在内存中）
 │    返回: { "messages": [], "has_more": false, "status": "running" }
 │
-├─ ④ loadSessionEvents(_, [], "hydrate")
-│    messages 数组为空，UI 初始为空状态
-        ]
-       全部补发 → 客户端逐条入 30ms 微批处理，30ms 后一把 applyEvent 创建/追加 messages
-    → 此后继续 live 流直至 done
-```
+ ├─ ④ loadSessionEvents(_, [], "hydrate")
+ │    messages 数组为空，UI 初始为空状态
+ │
+ └─ ⑤ wsClient.subscribeOnly(sessionId)
+     后端 volatile replay buffer 有内容 → 补发:
+     [
+       user_message "..."   ← 含用户输入
+       assistant_message "..."
+       ...
+     ]
+     全部补发 → 客户端逐条入 30ms 微批处理，30ms 后一把 applyEvent 创建/追加 messages
+     → 此后继续 live 流直至 done
+ ```
 
-**结果**：UI 从空页面变为完整流式恢复，所有内容来自 replay + live。replay 帧一次性渲染到当前状态，无打字机回放。
+ **结果**：UI 从空页面变为完整流式恢复，所有内容来自 replay + live。replay 帧一次性渲染到当前状态，无打字机回放。
 
-**涉及代码**：
-       ]
-       全部补发 → applyEvent 逐条创建 messages
-    → 此后继续 live 流直至 done
-```
-
-**结果**：UI 从空页面变为完整流式恢复，所有内容来自 replay + live。
-
-**涉及代码**：
-- `loadSessionEvents(messages=[])` 空数组不报错
-- replay 帧全部走 `applyEvent`，没有去重命中（HTTP 为空）
+ **涉及代码**：
+ - `loadSessionEvents(messages=[])` 空数组不报错
+ - replay 帧全部走 `applyEvent`，没有去重命中（HTTP 为空）
 
 ---
 
@@ -274,7 +269,7 @@ WebSocket 断开
 │   ② 检查 attachedSessions（之前订阅过的 session 列表）
 │   ③ 对每个之前 attach 的 session:
 │      ├─ 如果该 session 的 agent 仍在运行:
-│      │   端 volatile replay buffer 有内容 → 补发
+ │      │   后端 volatile replay buffer 有内容 → 补发
 │      │   后续 live 流继续
 │      └─ 如果 agent 已完成:
 │           replay buffer 已清空 → 没有补发

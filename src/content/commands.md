@@ -25,7 +25,7 @@ if not await cmd.try_dispatch(data): return       # 锁内，普通级
 | 指令 | 层级 | 参数 | 说明 | 注册位置 |
 |------|------|------|------|---------|
 | `/cancel` | 系统级（`system=True`） | 无 | 取消当前 session 正在执行的 Agent。handler 直接调用 `agent.cancel_nowait()` 和 `task.cancel()`，被取消的 Agent（或 task）产出 `done(success=false, reason="cancelled")` 作为最终信号 | `AgentLoop._register_commands()` |
-| `/compact` | 普通级 | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 async 方式直接 await 执行压缩：先 emit `session_status("running")`，再 `await compact_handler.enable_pending_compact()`，没有 pending 则 `await compact_handler.compact(enabled=True, silent=False)`，最后 emit `session_status("idle")`。命中后 `_step_command` 返回 `False` 短路终止 Pipeline，指令文本不送入 Agent | `AgentLoop._register_commands()` |
+| `/compact` | 普通级 | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 async 方式直接 await 执行压缩：先 emit `session_status("compacting")`，再 `await compact_handler.enable_pending_compact()`，没有 pending 则 `await compact_handler.compact(enabled=True, silent=False)`，最后 emit `session_status(...)` 收尾（通常是 `idle`，因 `_compacting_sessions` 在 finally 中先被清掉再发状态）。命中后 `_step_command` 返回 `False` 短路终止 Pipeline，指令文本不送入 Agent | `AgentLoop._register_commands()` |
 
 > `/help` 等指令当前未注册。如需扩展，可在 `AgentLoop._register_commands()` 中追加普通级指令，或通过插件 `self.api.command_manager.register()` 注册（当前 `command_manager` 已注入 `PluginManager`，插件注册的指令会在 `GET /api/commands` 返回的列表中出现，并在 `_step_command` 中匹配）。未匹配任何注册指令的 `/` 开头输入会作为普通 `user_message` 送入 Agent。
 
@@ -150,7 +150,7 @@ self.command_manager.register(
 5. `_step_command`：检测到 `/compact`，`try_dispatch()` 匹配 → 执行 `_cmd_compact` handler → handler async 直接 await 压缩 → 返回命中 → `_step_command` 返回 `False`（短路终止 Pipeline）
 6. `_step_compact` 和 `_step_run` 不再执行
 
-`/compact` 的用户输入**不会**入库 `user_message`，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 异步发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_publish_session_status_async` 发送的 `session_status` 全局事件控制（`running` → `idle`）。
+`/compact` 的用户输入**不会**入库 `user_message`，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 异步发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_publish_session_status_async` 发送的 `session_status` 全局事件控制（`compacting` → `idle`）。
 
 ---
 

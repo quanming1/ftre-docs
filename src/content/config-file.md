@@ -220,10 +220,10 @@
   - `api_protocol` 默认 `"openai"`（`config.py:166`），`_build_model_name()` 直接返回 `model_id`（`config.py:140-141`），不影响 `LLMConfig.api_type`；
   - `LLMConfig.api_type` 始终为 dataclass 默认 `"completions"`（`config.py:47`），实际走 OpenAI Chat Completions 流式适配；
   - `title_generation` / `compact_generation` / `user_prompt` / `context` 段读取与 `config.py:208-263` 的 `_f("camelCase", "snake_case", default)` 双键兼容逻辑一致；
-  - `agents.defaults.workspace` 在 `load_config()` 中读取并写入 `AgentConfig.workspace`；运行时 `AgentLoop._run_async` 通过 `session.get("workspace", "") or os.getcwd()` 选择工作区（`agent/loop.py:437`），session workspace 优先级最高；
+  - `agents.defaults.workspace` 在 `load_config()` 中读取并写入 `AgentConfig.workspace`；运行时 `AgentLoop._run_async` 通过 `session.get("workspace", "") or os.getcwd()` 选择工作区（`agent/loop.py:447`），session workspace 优先级最高；
   - `agents.defaults.context` 所有字段（`precompactThreshold` / `compactThreshold` / `consolidationRatio` / `safetyBuffer` / `idleCompaction` / `silent`）与 `ContextConfig` dataclass 一致；
   - `servers.gateway` 默认 `127.0.0.1:48650`，`servers.frontend` 默认 `48651`（由 `ftre/start.py` 与 `ftre-desktop/scripts/resolve-port.mjs` 读取）；
   - 文档站端口 `48652` 由 `E:\ftre-docs\scripts\dev.mjs` 读取并通过 `npx vite --port ${port}` 启动（`scripts/dev.mjs`）；
   - `plugins[]` 仅用于同名插件配置注入；`PluginManager.load_all()` 内部先加载内置插件再扫描 `~/.ftre/plugins/`（`plugin/plugin.py:174-211`）；
-  - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:332`）、`_run_async`（`agent/loop.py:415`）、`_cmd_compact`（`agent/loop.py:177`）、`_schedule_idle_compact`（`agent/loop.py:609`）——与本文描述一致。
+  - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:342`）、`_run_async`（`agent/loop.py:425`）、`_cmd_compact`（`agent/loop.py:179`）、`_schedule_idle_compact`（`agent/loop.py:628`）；另在 `_build_messages`（`agent/loop.py:136`）也被调用——与本文描述一致。
 - **2025-07-11**：补全 `agents.defaults` 表格中缺失的 `system_prompt` 和 `user_prompt` 字段。源码依据：`config.py:236-243`（`load_config()` 中读取 `system_prompt` / `user_prompt`），`context_govern.py:50-63`（`user_prompt` 注入逻辑）。

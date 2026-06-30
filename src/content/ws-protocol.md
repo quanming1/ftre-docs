@@ -594,12 +594,12 @@
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
 | `session_id` | string | 状态变化的 session ID（在 data 内，因为帧本身不绑定单一 session） |
-| `status` | string | `"running"`（Agent 或命令开始执行）/ `"idle"`（执行结束） |
+| `status` | string | `"running"`（普通 Agent 执行中）/ `"compacting"`（`/compact` 等命令执行中）/ `"idle"`（无活动执行） |
 
 **何时发出**：
 - 普通 Agent 执行路径的 `running`：在 `_active_agents[sid] = agent` 之后、`user_message` echo 之前（实际在 `_run_async()` 中）
 - 普通 Agent 执行路径的 `idle`：Agent 执行结束时在 `finally` 中 `pop` 之后发出（正常 / 错误 / 取消 / 超迭代都会发）
-- `/compact` 指令路径：不进入 `_run_async()`，由 `_cmd_compact()` 内部调用 `_publish_session_status_async()` 手动发送 `running` / `idle`，用于驱动前端 loading 状态
+- `/compact` 指令路径：不进入 `_run_async()`，由 `_cmd_compact()` 内部调用 `_publish_session_status_async()` 手动发送 `compacting`（开始）→ 完成后发送 `get_session_status()` 返回的最终态（通常是 `idle`，因为 `_compacting_sessions` 在 finally 中先被清掉再发状态）用于驱动前端 loading 状态
 
 **前端处理**：
 - 不入消息流、不持久化，是瞬时控制信号
@@ -810,8 +810,8 @@
 
 - **2025-06-26**：与 `ftre/src/ftre/channel/ws_channel.py` / `ftre-agent-core/.../websocket-client.ts` / `ftre/src/ftre/api/routes.py` 核对，描述准确。
   - WS 默认地址 `ws://127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致；
-  - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:465`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:499`；
-  - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:459-478`）；
-  - 前端 `websocket-client.ts:230-236` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
-  - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-47`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:188-228`）；
+  - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:522`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:556`；
+  - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:518-535`）；
+  - 前端 `websocket-client.ts:223-229` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
+  - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:245-285`）；
   - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。

@@ -38,7 +38,8 @@
 > `compact_threshold`（默认 0.6）当前未被任何调用方用作触发水位。
 > `should_compact()` 的默认阈值是 `compact_threshold`，但所有调用方
 > （`_step_compact`、`_schedule_idle_compact`）都显式传入
-> `precompact_threshold`(0.5)，因此实际触发水位统一为 0.5。
+> `precompact_threshold`（默认 0.5，运行时读 `config.context.precompact_threshold`），
+> 因此实际触发水位统一为 `precompact_threshold`（默认 0.5）。
 > `enable_pending_compact()` 用于启用历史上已存在的 `enabled=false` 压缩事件，
 > 但当前代码没有路径写入 `enabled=false`，因此该调用总是找不到 pending，
 > 直接回退到 `compact(enabled=true)`。
@@ -283,21 +284,21 @@ ftre 的差异：
 
 ## 校对记录
 
-- **2025-06-26**：与 `ftre/src/ftre/agent/compact_handler.py` / `ftre/src/ftre/agent/loop.py` / `ftre/src/ftre/session/manager.py` / `ftre/src/ftre/config.py` 完整核对，**所有关键事实均与源码一致**：
+- **2025-07-17**：与 `ftre/src/ftre/agent/compact_handler.py` / `ftre/src/ftre/agent/loop.py` / `ftre/src/ftre/session/manager.py` / `ftre/src/ftre/config.py` 完整核对，**所有关键事实均与源码一致**：
   - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_handler.py:42-43`）；
   - `ContextConfig` dataclass 字段（`precompact_threshold` / `compact_threshold` / `consolidation_ratio` / `safety_buffer` / `idle_compaction` / `silent`）与 `config.py:58-77` 一致；
-  - 实际触发路径统一使用 `precompact_threshold`：`_step_compact`（`agent/loop.py:333-340`）、`_schedule_idle_compact`（`agent/loop.py:625-630`）、`_run_async` 的 `enable_pending_compact → compact(enabled=True)`（`agent/loop.py:416-434`）；
+  - 实际触发路径统一使用 `precompact_threshold`：`_step_compact`（`agent/loop.py:343-351`）、`_schedule_idle_compact`（`agent/loop.py:644-649`）、`_run_async` 的 `enable_pending_compact → compact(enabled=True)`（`agent/loop.py:430-442`）；
   - `compact_threshold` 当前仅作为 `enable_ratio` 元数据写入 `context_compact` 事件（`compact_handler.py:292`），不参与触发决策；
   - `should_compact()` 默认阈值是 `compact_threshold`，但所有调用方都显式传入 `precompact_threshold`，与本文描述一致；
   - 自动压缩的 `silent` 取 `config.context.silent`（默认 `true`），后台 idle/usage 路径与用户输入关键路径均按该配置传入 `CompactHandler`，手动 `/compact` 固定 `silent=False`；
-  - 后台 idle/usage 路径的冷却机制（`_compact_retry_after`，`COMPACT_UNRETRYABLE_LLM_CODES = {"auth_error", "bad_request", "content_filter"}`，`COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`，`agent/loop.py:49-50`）仅作用于后台路径，不影响用户输入路径和手动 `/compact`；
-  - 后台路径去重通过 `_compact_tasks`（`agent/loop.py:113`）保证同一 session 同一时间最多一个后台 compact task 在飞；
+  - 后台 idle/usage 路径的冷却机制（`_compact_retry_after`，`COMPACT_UNRETRYABLE_LLM_CODES = {"auth_error", "bad_request", "content_filter"}`，`COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`，`agent/loop.py:50-51`）仅作用于后台路径，不影响用户输入路径和手动 `/compact`；
+  - 后台路径去重通过 `_compact_tasks`（`agent/loop.py:114`）保证同一 session 同一时间最多一个后台 compact task 在飞；
   - `compact()` 实际写入的 `context_compact` 事件字段：`summary` / `enabled` / `trigger_ratio` / `enable_ratio` / `events_before` / `tokens_before` / `tokens_after`（仅 enabled=true）/ `silent`（仅 silent=true），与本文表格一致；
   - `enable_pending_compact()` 启用历史 pending 时，`tokens_after` 估算包含 tail 事件（`compact_handler.py:176`）；`compact()` 写入时无 tail，仅估算 summary 本身（`compact_handler.py:296-303`）；
-  - `_notify()` 全异步：`await self.bus.publish_outbound(msg)`（`compact_handler.py:410`），无需 `run_coroutine_threadsafe`；
-  - `to_openai_messages()` 中 `context_compact(enabled=True)` 触发 `_flush_tool_calls()` + `_take_reasoning()` 后清空 messages，注入 `[历史上下文摘要]\n{summary}` 作为 user 消息起点（`session/manager.py:596-614`）；
-  - `head` 范围：从上一个 `enabled=true` 的 compact 之后全量；`get_cursor_index()` 返回「上一条已启用 compact 的下一位」（`compact_handler.py:538-543`）；
-  - `get_pending_compact_index()` 查找 `enabled=False` 的 pending（`compact_handler.py:554-562`）；
+  - `_notify()` 全异步：`await self.bus.publish_outbound(msg)`（`compact_handler.py:411`），无需 `run_coroutine_threadsafe`；
+  - `to_openai_messages()` 中 `context_compact(enabled=True)` 触发 `_flush_tool_calls()` + `_take_reasoning()` 后清空 messages，注入 `[历史上下文摘要]\n{summary}` 作为 user 消息起点（`session/manager.py:696-714`）；
+  - `head` 范围：从上一个 `enabled=true` 的 compact 之后全量；`get_cursor_index()` 返回「上一条已启用 compact 的下一位」（`compact_handler.py:559-564`）；
+  - `get_pending_compact_index()` 查找 `enabled=False` 的 pending（`compact_handler.py:575-583`）；
   - LLM 摘要走 `_run_compact_llm` 直调，无 subagent、无 raw 模式，prompt 模板 `SUMMARY_TEMPLATE` + 系统提示 `COMPACT_LLM_SYSTEM_PROMPT`（`compact_handler.py:46-92`）；
   - 摘要基本有效性校验：非空 + 长度 ≥ 200 + 包含 `## `（`compact_handler.py:381-383`）；
   - `_serialize_events` 把事件流转成 `[User]: ...` / `[Assistant]: ...` / `[Assistant reasoning]: ...` / `[Assistant tool call]: ...` / `[Tool result]: ...` 等文本（`compact_handler.py:423-488`），tool_result 默认截断 2000 字符。
