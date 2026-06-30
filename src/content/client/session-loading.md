@@ -25,24 +25,29 @@ eventId → data.event_id → id（WS 帧 id）
 去重后的 `eventId` 存入 bucket 的 `seenEventIds` Set，后续重复事件直接丢弃。
 
 ---
-
-## 情况 1：切换到空闲 Session（Agent 未运行）
-
-**场景**：Session 的历史对话已完成，agent 没有在执行。
+三条来源可能产出同一事件（例如 `tool_call` 既被 HTTP 返回又被 replay 补发）。前端按以下优先级取 `event_id` 去重：
 
 ```
-用户点击 Session B
-│
+eventId → data.event_id → id（WS 帧 id）
+```
+
+去重后的 `eventId` 存入 bucket 的 `seenEventIds` Set，后续重复事件直接丢弃。
+
+### WS 事件微批处理
+
+chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
+
+- 流式事件（`assistant_message` / `reasoning` / `tool_call_streaming`）会被收集到 per-session 批次里，30ms 后一把 `applyEvent` + 一次 React 重渲染。
+- 稳定事件（`tool_call` / `tool_result` / `done` / `error` / `assistant_message_complete` 等）立即 flush 已有批次，然后单独处理。
+
+**为什么需要这个**：replay buffer 下发的是原始流式 delta（可能几十条 `assistant_message`），如果逐条走 `applyEvent` + `mirror()`，React 会用 30+ 次 setState 重渲染，UI 看起来像打字机从零开始回放。微批处理后所有 delta 一次性消费到 bucket，最后一次重渲染时一次性刷新到当前状态。
 ├─ ① clearSessionCache(sessionId)
 │    清空本地 bucket（messages / events / seenEventIds / hasMoreHistory）
 │
 ├─ ② switchTo(sessionId)
 │    chat store 记录 current sessionId，UI 进入 loading 状态
 │
-├─ ③ HTTP: GET /api/sessions/{sessionId}/messages?limit_turns=5
-│    返回:
-│    {
-│      "messages": [user_message, assistant_message_complete, tool_call, ...],
+核心原则：**HTTP 负责历史快照 + 状态初始化，WS replay 负责补齐实时缺口，WS live 负责持续更新，event_id 统一去重，30ms 微批处理避免 replay 打字机回放。**
 │      "has_more": true / false,
 │      "status": "idle"              ← 后端 is_session_running() = false
 │    }
@@ -108,10 +113,12 @@ eventId → data.event_id → id（WS 帧 id）
          assistant_message  "我来看看这个文件"    ← 流式文本片段
          tool_call_streaming id=call_2, name="bash"  ← 正在流式的工具调用
        ]
-       全部补发给客户端
-    → 客户端收到，走 applyEvent
-       event_id 去重：HTTP 里已有的不会被重复渲染
-       HTTP 里没有的（流式片段）→ 追加到现有 messages 尾部
+        全部补发给客户端
+    → 客户端收到，逐条入 30ms 微批处理
+       流式事件先收集到 per-session 批次，30ms 后一把 applyEvent + 一次 React 重渲染
+       HTTP 已有的（按 event_id 去重命中）直接丢弃
+       HTTP 没有的（流式片段）→ 一次性追加到现有 messages 尾部
+    → 此后继续 live 流：
     → 此后继续 live 流：
        tool_call_streaming(arguments_delta) → 追加入 tool call 卡片
        tool_call(bash) → 替换流式 tool 为完整卡片
@@ -120,10 +127,17 @@ eventId → data.event_id → id（WS 帧 id）
        done → 清空 replay buffer，setSessionStatus("idle")
 ```
 
-**结果**：UI 展示 DB 历史 + replay 补发的流式片段 + 后续 live 流，无缝恢复。
-
 **关键点**：
 - `setSessionStatus("running")` 在 HTTP 返回后立即设置，WS attach 前横幅就已经显示
+- replay buffer 补发的帧和 HTTP 已加载的帧可能重叠，靠 `event_id` 去重
+- `assistant_message` 会续写到 HTTP 尾部那条 assistant 消息上（`streaming: true`）
+- replay 帧走 30ms 微批处理：所有流式 delta 在窗口结束瞬间一次消费并渲染，UI 不会逐字回放
+
+**涉及代码**：
+- 后端 `ws_channel.py` → `_VolatileReplayBuffer.track()` / `replay()`
+- 前端 `chat.ts` → `applyEvent()`（第 243 行起）→ `tail()` / `ensure()` 流式续写
+- 前端 `chat.ts` → `seenEventIds` 去重（第 224-241 行）
+- 前端 `chat.ts` → `_enqueueWsEvent()` / `_flushWsBatch()`（30ms 微批处理）
 - replay buffer 补发的帧和 HTTP 已加载的帧可能重叠，靠 `event_id` 去重
 - `assistant_message` 会续写到 HTTP 尾部那条 assistant 消息上（`streaming: true`）
 
@@ -151,16 +165,14 @@ eventId → data.event_id → id（WS 帧 id）
 │
 ├─ ④ loadSessionEvents(_, [], "hydrate")
 │    messages 数组为空，UI 初始为空状态
-│
-├─ ⑤ setSessionStatus(sessionId, "running")
-│    UI: 显示 Running... 横幅
-│
-└─ ⑥ wsClient.subscribeOnly(sessionId)
-    → replay buffer:
-       [
-         assistant_message  "我先看看项目结构"
-         reasoning           "用户的项目是一个 React 项目..."
-         tool_call_streaming id=call_1, name="list_files"
+        ]
+       全部补发 → 客户端逐条入 30ms 微批处理，30ms 后一把 applyEvent 创建/追加 messages
+    → 此后继续 live 流直至 done
+```
+
+**结果**：UI 从空页面变为完整流式恢复，所有内容来自 replay + live。replay 帧一次性渲染到当前状态，无打字机回放。
+
+**涉及代码**：
        ]
        全部补发 → applyEvent 逐条创建 messages
     → 此后继续 live 流直至 done
