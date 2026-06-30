@@ -170,7 +170,7 @@
 |---------------|------|------|
 | `channel_id` | string | 目标 Channel ID，即后端 `BusMessage.to_channel`；普通 ws 消息为 `"ws"`，全局广播为 `"*"` |
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
-| `volatile_seq` | number | 可选。session 内递增序列号，从 1 开始。仅出现在未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming`）上。客户端用 `session_id + volatile_seq` 去重，避免 attach replay 和 live 流重叠时重复渲染；WS 重连时清空去重状态 |
+| `volatile_seq` | number | 可选。仅出现在未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming`）上。<br><br>**用途：attach 时的 replay/live 去重。** 后端对每个 session 独立维护一个从 1 开始的递增计数器。每次下发一条流式帧就把计数器 +1，写入该帧的 `volatile_seq`。<br><br>**为什么需要去重：** 客户端 attach 时，后端同时做两件事：① `replay()` 补发 volatile buffer 中已有的帧（seq=1,2,3）；② live 流继续下发当前正在产生的帧（也带 seq=1,2,3,4...）。attach 瞬间 replays 和 live 会重叠发送 seq=1,2,3 共 3 帧，重复渲染会导致 UI 错乱。<br><br>**去重方式：** 客户端维护一个 `session_id → seen_seq_set` 的 Map。收到带 `volatile_seq` 的帧时，构造 key `"${session_id}:${seq}"`，如果已在 set 中则丢弃；不在则记录并渲染。WS 重连时清空整个 set（替代旧版 `volatile_epoch` 的跨重启保障）。<br><br>**示例（session "ws::s1"）：**<br>1. live 下发：assistant_message seq=1 → 渲染，key "ws::s1:1" 记入 set<br>2. live 下发：assistant_message seq=2 → 渲染，key "ws::s1:2" 记入 set<br>3. 客户端 detach 后再 attach<br>4. replay 补发：assistant_message seq=1 → key "ws::s1:1" **已存在**，丢弃 ← 去重生效<br>5. replay 补发：assistant_message seq=2 → key "ws::s1:2" **已存在**，丢弃<br>6. live 下发：assistant_message seq=3 → 渲染，key "ws::s1:3" 记入 set<br>7. live 下发：assistant_message seq=4 → 渲染 |
 
 **Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件，长度不设上限。当客户端 attach 时，先补发这些缓存，再继续接收 live 流。稳定事件到达时（如 `assistant_message_complete`）自动清理对应的流式草稿。
 
