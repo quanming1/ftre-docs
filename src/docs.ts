@@ -31,6 +31,7 @@ export const docs: DocEntry[] = [
   // 插件
   { path: 'plugin-system', title: '插件系统', category: '插件' },
   { path: 'plugin-builtins', title: '内置插件', category: '插件' },
+  { path: 'octo-plugin', title: 'Octo Channel 插件', category: '插件' },
 
   // 配置
   { path: 'config-file', title: 'config.json 配置', category: '配置' },
