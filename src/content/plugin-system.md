@@ -109,18 +109,33 @@ self.api.register_router(router)
 # 最终路径: /api/my-plugin/status
 ```
 
-### append_system_prompt(text)
+### 修改 messages 列表（通过 before_agent_run hook）
 
-向所有会话的 system prompt 末尾追加内容。插件可通过此方法注入额外的上下文或指令，内容会在每次构建 messages 时附加到 system prompt 后面：
+> **`append_system_prompt()` 已移除。** 当前内置插件的 system prompt 注入通过 `BEFORE_AGENT_RUN` hook 操作 `ctx.messages`（`McpPlugin` / `SkillPlugin` 通过 `ctx.messages.insert(0, {"role": "system", ...})` 注入系统消息）；`BEFORE_MESSAGES_BUILD` hook 可直接修改 `ctx.config.system_prompt`（`ContextGovernPlugin` 用于注入 AGENTS.md 和用户自定义提示词）。
 
 ```python
-self.api.append_system_prompt(
-    "## MCP 工具\n"
-    "你可以通过 MCP 调用外部工具。工具名格式为 `mcp__{服务器}__{工具}`。"
-)
+from ftre.plugin import BEFORE_AGENT_RUN
+
+def _inject(self, ctx):
+    # 追加到已有的 system 消息
+    for msg in ctx.messages:
+        if msg.get("role") == "system":
+            msg["content"] += "\n\n## 额外指令\n- 始终使用中文回复"
+            break
+    else:
+        ctx.messages.insert(0, {"role": "system", "content": "## 额外指令\n- 始终使用中文回复"})
+    # 也可以插入 user 消息作为对话上下文
+    ctx.messages.insert(1, {"role": "user", "content": "[会话背景]\n这是群聊 \"项目组\" 中的对话"})
+    return ctx
+
+self.api.register_hook(BEFORE_AGENT_RUN, _inject)
 ```
 
-多个插件追加的内容会按注册顺序拼接，`AgentLoop._build_messages()` 在构建 LLM 输入时统一附加。
+相比旧的 `append_system_prompt`，新机制的优势：
+- 直接操作 OpenAI 格式的 messages，与 LLM 协议一致，所见即所得
+- 可以自由选择 `{"role": "system"}` 或 `{"role": "user"}`，实现 OpenClaw 的 prependContext/prependSystemContext 双轨注入
+- 可以插入/删除/重排消息，不限于追加
+- 多个插件按注册顺序依次执行，后一个 hook 看到前一个的改写结果
 
 ### 注册 Tool（通过 tool_registry.register）
 
@@ -184,16 +199,23 @@ self.api.command_manager.register(
 
 ### register_hook(point, fn)
 
-在生命周期挂点注册钩子。当前框架内置并自动触发的挂点只有 `before_messages_build`：
+在生命周期挂点注册钩子。当前框架内置并自动触发的挂点有 `before_messages_build` 和 `before_agent_run`：
 
 ```python
-from ftre.plugin import BEFORE_MESSAGES_BUILD
+from ftre.plugin import BEFORE_MESSAGES_BUILD, BEFORE_AGENT_RUN
 
-def my_hook(ctx):
-    ctx.config.system_prompt += "\n\n额外提示词"
+# 挂点 1：消息构建前（事件流处理）
+def my_event_hook(ctx):
+    ctx.events = [e for e in ctx.events if e.get("type") != "noise"]
     return ctx
 
-self.api.register_hook(BEFORE_MESSAGES_BUILD, my_hook)
+# 挂点 2：Agent 运行前（OpenAI 消息列表操作）
+def my_run_hook(ctx):
+    ctx.messages.insert(0, {"role": "user", "content": "[GROUP CONTEXT]\n群聊信息..."})
+    return ctx
+
+self.api.register_hook(BEFORE_MESSAGES_BUILD, my_event_hook)
+self.api.register_hook(BEFORE_AGENT_RUN, my_run_hook)
 ```
 
 ---
@@ -231,9 +253,53 @@ def my_hook(ctx):
     return ctx
 ```
 
+### before_agent_run
+
+**触发时机：** 在 `AgentLoop._run_async()` 中，Agent 已创建、messages 已转 OpenAI 格式、`agent.run(messages)` 调用之前。
+
+**上下文 `AgentRunContext`：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `session_id` | str | 当前会话 ID（只读） |
+| `channel_id` | str | 来源 channel（只读） |
+| `messages` | list[dict] | OpenAI 格式消息列表（可增删改） |
+| `config` | AgentConfig | 配置深拷贝（可读） |
+
+**使用示例：**
+
+```python
+from ftre.plugin import BEFORE_AGENT_RUN
+
+def my_hook(ctx):
+    # 注入系统身份（system 消息）
+    ctx.messages.insert(0, {"role": "system", "content": "你是 Alice 的 AI 助手"})
+
+    # 注入对话上下文（user 消息）
+    ctx.messages.insert(1, {"role": "user", "content": "[GROUP CONTEXT]\n群聊信息\n[/GROUP CONTEXT]"})
+
+    # 或追加到已有 system 消息
+    for msg in ctx.messages:
+        if msg.get("role") == "system":
+            msg["content"] += "\n\n## MCP 工具\n你可以通过 MCP 调用外部工具。"
+            break
+
+    return ctx
+```
+
+**与 `before_messages_build` 的区别：**
+
+| 维度 | `before_messages_build` | `before_agent_run` |
+|------|------------------------|---------------------|
+| 触发时机 | 消息构建时（每次 run） | Agent 创建后、run 前（每次 run） |
+| 输入数据 | 原始事件流（list[dict]） | OpenAI 格式消息（list[dict]） |
+| 主要用途 | 事件流清洗/裁剪/注入、system_prompt 修改 | system/user 消息双轨注入 |
+| 可改字段 | events, config | messages, config |
+| 典型使用者 | context_govern, title_gen | mcp（注入 MCP 工具说明）、skill（注入 Skill 说明和列表）、octo（注入群聊上下文） |
+
 ### 自定义 Hook
 
-`HookManager` 只提供同步触发接口 `trigger_sync(point, ctx)`。框架当前只会自动触发 `before_messages_build`；如果你在扩展代码里手动触发自定义挂点，可复用同一个 HookManager：
+`HookManager` 只提供同步触发接口 `trigger_sync(point, ctx)`。框架当前自动触发 `before_messages_build` 和 `before_agent_run`；如果你在扩展代码里手动触发自定义挂点，可复用同一个 HookManager：
 
 ```python
 from ftre.plugin import HookManager
@@ -314,12 +380,18 @@ class MyTool(Tool):
 
 ## 校对记录
 
-- **2025-06-26**：与 `ftre/src/ftre/plugin/plugin.py` / `hook_manager.py` / `command/manager.py` / `main.py` 核对，描述准确。
-  - `FtrePluginApi` 暴露的方法与属性（`register_channel` / `register_hook` / `register_router` / `append_system_prompt` / `tool_registry` / `command_manager` / `event_loop`）与 `plugin/plugin.py:40-118` 一致；
-  - `PluginManager.__init__` 接受 `command_manager` 参数（`plugin/plugin.py:153`），并在 `_load` 时将其透传给 `FtrePluginApi`（`plugin/plugin.py:226`）；
-  - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py:174-211`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
-  - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:30-53` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:714-721`）；
-  - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py:63-87` 一致；
-  - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具（`tools/registry.py`）；插件同名工具之间在 `ftre.tools.ToolRegistry.register()` 阶段会抛 `ValueError`；
-  - `Injected` 注入解析发生在 `ToolRegistry.execute(..., runtime_context=...)` 路径（同步工具），异步工具在 `ToolHandler.run_one()` 直接 `await tool._get_callable()(**ctx.arguments)`，不会自动解析 `Injected`。
-- **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:97-118`。
+ - **2025-06-26**：与 `ftre/src/ftre/plugin/plugin.py` / `hook_manager.py` / `command/manager.py` / `main.py` 核对，描述准确。
+   - `FtrePluginApi` 暴露的方法与属性（`register_channel` / `register_hook` / `register_router` / `tool_registry` / `command_manager` / `event_loop`）与 `plugin/plugin.py` 一致；
+   - `PluginManager.__init__` 接受 `command_manager` 参数（`plugin/plugin.py`），并在 `_load` 时将其透传给 `FtrePluginApi`；
+   - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
+    - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:33-57` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:745-752`）；
+   - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py` 一致；
+   - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具；插件同名工具之间在 `ftre.tools.ToolRegistry.register()` 阶段会抛 `ValueError`；
+ - **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:95-97`（`register_router`）。
+  - **2025-07-18**：重构 system prompt 注入机制，新增 `before_agent_run` 挂点。
+    - 删除 `append_system_prompt()` 方法与 `appended_system_prompts` 属性；
+     - 新增 `AgentRunContext` dataclass，字段：`session_id` / `channel_id`（只读）、`messages`（OpenAI 格式消息列表，可增删改）、`config`（可读），与 `plugin/hook_manager.py:60-80` 一致；
+    - `AgentLoop._run_async()` 在 `_create_agent()` 之后、`agent.run(messages)` 之前触发 `before_agent_run` hook（`agent/loop.py:525-535`）；
+     - `mcp` 和 `skill` 内置插件从 `append_system_prompt` 迁移到 `register_hook(BEFORE_AGENT_RUN, self._inject_system_prompt)`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾（`plugin/builtin/mcp_plugin.py:19,36,51-59`、`plugin/builtin/skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`）；
+     - 现有 `before_messages_build` hook 在 `AgentLoop._build_messages()` 中触发，代码在 `agent/loop.py:741-755`。
+- **2025-12-18**：修正 `before_agent_build` hook 文档错误。经核实，代码中不存在 `BEFORE_AGENT_BUILD` / `AgentBuildContext`，`hook_manager.py` 只定义 `BEFORE_MESSAGES_BUILD`（`hook_manager.py:29`）和 `BEFORE_AGENT_RUN`（`hook_manager.py:30`）。`mcp` 和 `skill` 插件实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system()` 将提示词追加到第一条 system 消息末尾（非 `ctx.system_prompt`）。删除文档中虚构的 `before_agent_build` hook 章节，修正所有相关引用。

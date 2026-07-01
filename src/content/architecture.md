@@ -98,15 +98,27 @@
 基于 SQLite 的会话和消息持久化（`SessionManager`）：
 - `sessions` 表：会话元信息（`id`, `channel_id`, `title`, `workspace`, `created_at`, `updated_at`），老库会自动补 `channel_id` / `workspace` 列并按 `id` 前缀（`<ch>::sess_xxx`）回填 channel
 - `messages` 表：事件流（`id`, `session_id`, `type`, `data`, `timestamp`）
+- `external_sessions` 表：外部平台会话映射（`channel_id`, `external_key`, `session_id`, `external_data`, `created_at`, `updated_at`），主键 `(channel_id, external_key)`
+
+#### external_sessions 映射表
+
+`external_sessions` 是第三方平台会话到 ftre 内部 session 的**绑定表**，解决外部渠道（如 Octo 群聊、Telegram 频道）的**对话连续性**问题：同一个外部会话（如同一群号）每次触发时映射到同一个 ftre session，消息历史自然累积，重启后也在。
+
+核心方法 `get_or_create_external_session(channel_id, external_key, ...)`：
+1. 用 `(channel_id, external_key)` 查 `external_sessions` 表
+2. **找到** → 更新 `updated_at` 和 `external_data`，返回已有的 `session_id`
+3. **没找到** → 创建新 `sessions` 行 + `external_sessions` 行，返回新 `session_id`
+
+`external_data` 为任意 JSON 元数据（如群名、成员列表等），供插件按需存取。外部插件（如 Octo Channel）通过此机制让不同群聊拥有独立、持久的对话上下文，而非每次 @bot 都创建新 session。
 
 ### Plugin 系统
 
-从 `~/.ftre/plugins/` 加载 Python 插件，提供（通过 `FtrePluginApi`）：
+`PluginManager.load_all()` 会先加载内置插件目录 `src/ftre/plugin/builtin/`，再扫描 `~/.ftre/plugins/` 外部插件目录。插件通过 `FtrePluginApi` 获取能力：
 - `register_channel()` — 注册 Channel
 - `tool_registry` 属性 — 返回 `ToolRegistry` 实例，插件通过 `self.api.tool_registry.register(tool)` 注册 Tool
 - `register_hook()` — 注册生命周期 Hook
 - `register_router()` — 注册 FastAPI APIRouter，挂载到 `/api` 前缀下
-- `append_system_prompt()` — 向所有会话的 system prompt 末尾追加内容
+- system prompt 注入：`append_system_prompt()` API 已移除。插件通过 hook 注入：`BEFORE_AGENT_RUN` hook 操作 `ctx.messages`（`McpPlugin` / `SkillPlugin` 通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾）；`BEFORE_MESSAGES_BUILD` hook 可直接修改 `ctx.config.system_prompt`（`ContextGovernPlugin` 用于注入 AGENTS.md 和用户自定义提示词）
 - `command_manager` 属性 — 返回 `CommandManager` 实例，插件可通过 `api.command_manager.register()` 注册斜杠指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`，因此 `FtrePluginApi.command_manager` 运行时为 `CommandManager` 实例而非 `None`。系统级指令（如 `/cancel`，`system=True`）在锁外执行；普通指令在 Pipeline 锁内执行
 - `event_loop` 属性 — 返回主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。当前 `main.py` 通过 `event_loop=lambda: event_loop` 在 `PluginManager` 构造函数中传入事件循环，`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）
 
@@ -157,9 +169,10 @@ def build_default_tools(..., llm_config=None):
   - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
   - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
   - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:373-382` 一致；
-  - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router` / `append_system_prompt`）与 `ftre/src/ftre/plugin/plugin.py` 一致；
-  - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:731-744` 一致；
+   - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router`）与 `ftre/src/ftre/plugin/plugin.py` 一致；`append_system_prompt` 已移除，插件通过 `BEFORE_AGENT_RUN` / `BEFORE_MESSAGES_BUILD` hook 注入 system prompt；
+   - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:745-752` 一致；
   - `CompactHandler.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_handler.py` 一致；
 - `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
 - **2025-07-15**：补全 `read` 工具目录列举功能描述，与 `read.py:187-189` 的 `_list_dir` 一致。
 - **2025-07-16**：修正 `_list_dir` 行号引用。函数定义在 `read.py:45-55`，调用点在 `read.py:187-189`。原记录仅标注了调用点行号。
+- **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-59`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`（`append_to_first_system` 工具函数）。

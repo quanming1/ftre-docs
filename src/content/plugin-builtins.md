@@ -66,7 +66,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 **工作原理：**
 
 - `setup()` 时注册 `loadSkill` 工具（Tool 类），Agent 可以调用它按需读取 Skill 完整内容
-- `before_messages_build` 时扫描所有 Skill，提取名称和描述，以 `<skill_list>` 标签注入 system_prompt
+- 注册 `BEFORE_AGENT_RUN` hook，注入 `<skill_desc>` 标签说明 Skill 机制（如何发现与加载）和 `<skill_list>` 标签（可用 Skill 列表），均通过 `append_to_first_system(ctx.messages, ...)` 追加到第一条 system 消息末尾
 - Agent 根据用户需求自主判断是否需要调用 `loadSkill`，同一个 Skill 只加载一次
 
 ---
@@ -82,7 +82,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 **工作原理：**
 
 - `setup()` 时创建 `McpManager` 实例，通过 `self.api.tool_registry` 注册 MCP 工具
-- 通过 `self.api.append_system_prompt()` 注入 MCP 工具使用说明
+- 注册 `BEFORE_AGENT_RUN` hook，hook 函数（`_inject_system_prompt`）通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具使用说明到第一条 system 消息末尾
 - 通过 `self.api.register_router()` 注册 `/api/mcp` CRUD 路由
 - 异步启动 MCP 服务器连接，并启动 config watcher 实现热重载
 - 每 3 秒轮询 `config.json` 的 `mcp` 段变化作为兜底
@@ -93,7 +93,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 ## 通用约定
 
-这些插件主要通过 `before_messages_build` hook 参与 Agent 生命周期；`mcp` 注册 HTTP 路由和 MCP 工具，不注册 hook。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+这些插件主要通过 `before_messages_build` hook（`context_govern`、`title_gen`）或 `BEFORE_AGENT_RUN` hook（`mcp`、`skill`）参与 Agent 生命周期；`mcp` 额外注册 HTTP 路由和 MCP 工具，`skill` 注册 `loadSkill` 工具和 HTTP 路由。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
 
 ## 校对记录
 
@@ -102,7 +102,9 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
   - `context_govern` 六项能力（孤立事件清理 / tool_call 去重 / 相邻性修复 / 悬挂 tool_result / AGENTS.md 注入 / 用户自定义提示词注入）与 `context_govern.py:23-46` 一致；
   - `AGENTS_RULE` 与 `USER_CUSTOM_PROMPT` 标签的 XML 包裹格式与 `context_govern.py:50-97` 一致；
   - `title_gen` 默认配置（`DEFAULT_INPUT_TRUNCATE = 1000`、`DEFAULT_MAX_CHARS = 40`、`DEFAULT_SYSTEM_PROMPT`）与 `title_gen.py:24-29` 一致；通过 `before_messages_build` 判断首条消息（`ctx.events` 为空 + session 无 title），worker 线程中调用 `LLMHandler.stream` 生成标题；
-  - `mcp` 插件在 `setup()` 中调用 `self.api.append_system_prompt(...)` 注入 MCP 工具说明、`self.api.register_router(self._build_router())` 注册 `/mcp` 前缀路由（最终路径为 `/api/mcp`）、`loop.call_soon_threadsafe(asyncio.create_task, self._start_connections())` 异步启动 MCP 连接；
-  - MCP `local` / `remote` 配置校验在 `_validate_mcp_server`（`mcp_plugin.py:194-237`）；`timeout` 默认 `30_000` ms（即 30 秒），与代码一致；
-  - `skill` 插件默认目录 `~/.ftre/skills`，支持 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 三种形式（`skill_plugin.py:267-271,332-336`）；
+  - `mcp` 插件在 `setup()` 中注册 `BEFORE_AGENT_RUN` hook，hook 函数 `_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾；`self.api.register_router(self._build_router())` 注册 `/mcp` 前缀路由（最终路径为 `/api/mcp`）；`loop.call_soon_threadsafe(asyncio.create_task, self._start_connections())` 异步启动 MCP 连接；
+   - MCP `local` / `remote` 配置校验在 `_validate_mcp_server`（`mcp_plugin.py:198-241`）；`timeout` 默认 `30_000` ms（即 30 秒），与代码一致；
+   - `skill` 插件默认目录 `~/.ftre/skills`，支持 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 三种形式（`skill_plugin.py:276-278,341-343`）；
   - 上下文压缩功能已迁出插件：原 `context_compact.py` 插件不再存在；`CompactHandler` 在 `ftre/src/ftre/agent/compact_handler.py`；`/compact` 在 `AgentLoop._register_commands()` 注册为普通指令。
+- **2025-07-18**：修正 mcp 插件的 hook 描述。`mcp_plugin.py:36` 实际注册 `BEFORE_AGENT_RUN`，`_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾。同步修正第 4 节「通用约定」中 "mcp 不注册 hook" 的错误表述。源码依据：`mcp_plugin.py:19,36,51-59`。
+- **2025-12-18**：修正 skill 插件 hook 描述。`skill_plugin.py:49` 实际注册 `BEFORE_AGENT_RUN`，skill 的 `_inject_system_prompt` 同时注入 `<skill_desc>` 和 `<skill_list>`（通过 `append_to_first_system(ctx.messages, ...)` 追加到第一条 system 消息末尾），非两个独立 hook。同步修正校对记录中 mcp 的 hook 描述。

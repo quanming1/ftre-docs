@@ -126,10 +126,10 @@ Skill 文件保存在 ~/.ftre/skills/
 ## 校对记录
 
 - **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/skill_plugin.py` / `ftre/src/ftre/api/skill.py` 核对，描述准确。
-  - Skill 三种文件形式 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 与 `skill_plugin.py:267-271,332-336` 一致；
-  - `loadSkill` 工具由 `skill_plugin.py:252-297` 中 `create_load_skill_tool(skills_dir, disabled_skills)` 创建并通过 `self.api.tool_registry.register(...)`（`skill_plugin.py:56`）注册到 Agent 工具集；
-  - `<skill_list>` 标签注入 system_prompt 的实现见 `skill_plugin.py:237-248`；
-  - HTTP API 路由（`/api/skills` 系列，包括 `GET /api/skills`、`GET /api/skills/{name}`、`POST /api/skills`、`PUT /api/skills/{name}`、`DELETE /api/skills/{name}`、`PATCH /api/skills/{name}/toggle`）由 `skill_plugin.py:73-...` 通过 `APIRouter(prefix="/skills")` 注册，最终路径为 `/api/skills*`；
+  - Skill 三种文件形式 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 与 `skill_plugin.py:276-278,341-343` 一致；
+  - `loadSkill` 工具由 `skill_plugin.py:260` 中 `create_load_skill_tool(skills_dir, disabled_skills)` 创建并通过 `self.api.tool_registry.register(...)`（`skill_plugin.py:45`）注册到 Agent 工具集；
+  - `<skill_list>` 标签注入的实现见 `skill_plugin.py:234-257`（`_build_skill_list_prompt`），由 `_inject_system_prompt`（`skill_plugin.py:51-66`）通过 `BEFORE_AGENT_RUN` hook 调用，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾；
+  - HTTP API 路由（`/api/skills` 系列，包括 `GET /api/skills`、`GET /api/skills/{name}`、`POST /api/skills`、`PUT /api/skills/{name}`、`DELETE /api/skills/{name}`、`PATCH /api/skills/{name}/toggle`）由 `skill_plugin.py:86-...` 通过 `APIRouter(prefix="/skills")` 注册，最终路径为 `/api/skills*`；
   - `disabled_skills` 通过 `config.json` 的 `disabled_skills` 数组管理，`PATCH /api/skills/{name}/toggle` 切换；
   - YAML frontmatter：可选手写；`POST /api/skills` 创建时模板自动生成 `name` + `description`；`extract_description()` 优先从 frontmatter 读取；
   - 当前源码仓库只定义 Skill 插件、工具和 CRUD API，不包含固定的“内置 Skill”清单；可用 Skill 以运行时 `~/.ftre/skills/` 目录实际内容为准。
