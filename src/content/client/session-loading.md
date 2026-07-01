@@ -138,8 +138,8 @@ chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
 
  **涉及代码**：
  - 后端 `ws_channel.py` → `_VolatileReplayBuffer.track()` / `replay()`
- - 前端 `chat.ts` → `applyEvent()`（第 243 行起）→ `tail()` / `ensure()` 流式续写
- - 前端 `chat.ts` → `seenEventIds` 去重（第 224-241 行）
+ - 前端 `chat.ts` → `applyEvent()`（第 232 行起）→ `tail()` / `ensure()` 流式续写
+ - 前端 `chat.ts` → `seenEventIds` 去重（第 213-230 行）
  - 前端 `chat.ts` → `_enqueueWsEvent()` / `_flushWsBatch()`（30ms 微批处理）
 
 ---

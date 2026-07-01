@@ -176,5 +176,5 @@ WebSocketChannel.send()
   - `BusMessage` 字段（`id` / `type` / `from_channel` / `from_session` / `to_channel` / `to_session` / `data` / `metadata` / `timestamp`）与 `bus/message.py:17-36` 一致；`id` 由 `uuid.uuid4().hex[:16]` 生成（前 16 位 hex）；
   - `GLOBAL_CHANNEL = "*"` 与 `GLOBAL_SESSION = "*"` 定义在 `bus/message.py:13-14`；
   - `MIRROR_TO_WS_CHANNELS = {"cron"}` 定义在 `channel/manager.py:13`，并由 `_dispatch_loop` 在 cron channel 分发后镜像到 ws；
-  - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:518-535`），不再产生 `type="cancel"` 的 BusMessage；
+   - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`），不再产生 `type="cancel"` 的 BusMessage；
   - `_PERSISTENT_CLASSES` 不包含 `assistant_message` / `reasoning`（流式增量）/ `retry` / `tool_cancel_requested` / `tool_cancelled`，这些类型不入库。

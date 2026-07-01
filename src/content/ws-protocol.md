@@ -781,6 +781,7 @@
 | GET | `/api/sessions/:id/token_usage` | 获取 Token 用量估算 |
 | GET | `/api/workspaces` | 列出工作区（支持 `channel_id` 过滤；默认 `ws`） |
 | GET | `/api/images/{filename}` | 返回 `~/.ftre/assets/images/` 目录下的图片文件，供前端历史消息渲染附件图片；对 `filename` 做 basename 过滤防路径穿越 |
+| GET | `/api/image-file?path=<abs_path>` | 按绝对路径返回本地图片文件，供 renderer 预览；对 path 做 `expanduser`+`abspath` 解析，校验文件存在且 MIME 为 image 类型 |
 | GET | `/api/skills` | 列出所有 Skill 元信息 |
 | GET | `/api/skills/:name` | 读取单个 Skill 完整信息 |
 | POST | `/api/skills` | 创建 Skill（返回 201） |
@@ -808,10 +809,11 @@
 
 ## 校对记录
 
-- **2025-06-26**：与 `ftre/src/ftre/channel/ws_channel.py` / `ftre-agent-core/.../websocket-client.ts` / `ftre/src/ftre/api/routes.py` 核对，描述准确。
-  - WS 默认地址 `ws://127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致；
-  - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:522`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:556`；
-  - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:518-535`）；
-  - 前端 `websocket-client.ts:223-229` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
-  - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:245-285`）；
-  - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
+ - **2025-06-26**：与 `ftre/src/ftre/channel/ws_channel.py` / `ftre-agent-core/.../websocket-client.ts` / `ftre/src/ftre/api/routes.py` 核对，描述准确。
+   - WS 默认地址 `ws://127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致；
+    - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:525`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:559`；
+    - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`）；
+   - 前端 `websocket-client.ts:223-229` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
+    - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-293`）；
+   - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
+ - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:456-470`。
