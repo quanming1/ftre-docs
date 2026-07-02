@@ -130,6 +130,7 @@
 - `should_compact()`：水位判断（async，只读 DB），默认会看 `compact_threshold`，但当前所有调用方都显式传入 `precompact_threshold`（默认 0.5）
 - `compact()`：异步执行 LLM 直调摘要；当前后台 idle/usage 路径与用户输入关键路径实际都写 `context_compact(enabled=true)`。`compact(enabled=False)` 分支仍保留在代码里，作为兼容历史预压缩/pending 逻辑的入口，但当前没有调用方传入 `False`
 - `enable_pending_compact()`：把历史上可能存在的 pending（`enabled=false`）`context_compact` 原地更新为 `enabled=true`；当前没有新写入 `enabled=false` 的路径，因此该调用通常返回 `False`，随后回退到 `compact(enabled=true)`
+- `maybe_schedule_idle_compact()`：后台 idle/usage 压缩调度入口（由 `AgentLoop` 在 `done` / `usage_update` 后调用）。内部持有 `_compact_tasks` 去重 + `_compact_retry_after` 冷却退避，在 session lock 之外通过 `asyncio.create_task` 异步执行 `compact(enabled=true)`
 
 ### 工具能力裁剪（Tool Capability Gating）
 
@@ -167,11 +168,12 @@ def build_default_tools(..., llm_config=None):
   - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
   - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
   - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
-  - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:373-382` 一致；
+  - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:369-378` 一致；
    - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router`）与 `ftre/src/ftre/plugin/plugin.py` 一致；`append_system_prompt` 已移除，插件通过 `BEFORE_AGENT_RUN` / `BEFORE_MESSAGES_BUILD` hook 注入 system prompt；
-   - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:745-752` 一致；
+   - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:670-677` 一致；
   - `CompactHandler.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_handler.py` 一致；
 - `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
 - **2025-07-15**：补全 `read` 工具目录列举功能描述，与 `read.py:187-189` 的 `_list_dir` 一致。
 - **2025-07-16**：修正 `_list_dir` 行号引用。函数定义在 `read.py:45-55`，调用点在 `read.py:187-189`。原记录仅标注了调用点行号。
 - **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-60`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`（`append_to_first_system` 工具函数）。
+- **2026-07-02**：代码重构后复验。`CompactHandler` 新增 `maybe_schedule_idle_compact()` 方法，承接原 `AgentLoop._schedule_idle_compact()` 的后台压缩调度职责；`_compact_tasks` / `_compact_retry_after` / `COMPACT_UNRETRYABLE_*` 常量从 `loop.py` 迁移到 `compact_handler.py`。正文描述的所有行为仍准确，已在主要入口列表中补充 `maybe_schedule_idle_compact()`。

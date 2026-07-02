@@ -225,5 +225,6 @@
   - `servers.gateway` 默认 `127.0.0.1:48650`，`servers.frontend` 默认 `48651`（由 `ftre/start.py` 与 `ftre-desktop/scripts/resolve-port.mjs` 读取）；
   - 文档站端口 `48652` 由 `E:\ftre-docs\scripts\dev.mjs` 读取并通过 `npx vite --port ${port}` 启动（`scripts/dev.mjs`）；
   - `plugins[]` 仅用于同名插件配置注入；`PluginManager.load_all()` 内部先加载内置插件再扫描 `~/.ftre/plugins/`（`plugin/plugin.py:174-211`）；
-   - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:342`）、`_run_async`（`agent/loop.py:425`）、`_cmd_compact`（`agent/loop.py:179`）、`_schedule_idle_compact`（`agent/loop.py:640`）；另在 `__init__` 的 `_initial_context_cfg`（`agent/loop.py:136`）也被调用——与本文描述一致。
+   - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:338`）、`_run_async`（`agent/loop.py:421`）、`_cmd_compact`（`agent/loop.py:172`）、usage_update 路径（`agent/loop.py:566`）和 idle 路径（`agent/loop.py:624`，调用 `CompactHandler.maybe_schedule_idle_compact()`）；另在 `__init__` 的 `_initial_context_cfg`（`agent/loop.py:129`）也被调用——与本文描述一致。
 - **2025-07-11**：补全 `agents.defaults` 表格中缺失的 `system_prompt` 和 `user_prompt` 字段。源码依据：`config.py:236-243`（`load_config()` 中读取 `system_prompt` / `user_prompt`），`context_govern.py:50-63`（`user_prompt` 注入逻辑）。
+- **2026-07-02**：代码重构后复验。`_schedule_idle_compact` 已从 `AgentLoop` 移除，后台压缩调度改由 `CompactHandler.maybe_schedule_idle_compact()` 承担。`_load_current_config()` 的调用时机不变，仍在 `_step_compact`（`loop.py:338`）、`_run_async`（`loop.py:421`）、`_cmd_compact`（`loop.py:172`）、usage_update 路径（`loop.py:566`）和 idle 路径（`loop.py:624`）中调用；正文描述仍准确。

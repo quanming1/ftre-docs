@@ -93,7 +93,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 ## 通用约定
 
-这些插件主要通过 `before_messages_build` hook（`context_govern`、`title_gen`）或 `BEFORE_AGENT_RUN` hook（`mcp`、`skill`）参与 Agent 生命周期；`mcp` 额外注册 HTTP 路由和 MCP 工具，`skill` 注册 `loadSkill` 工具和 HTTP 路由。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `_schedule_idle_compact` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+这些插件主要通过 `before_messages_build` hook（`context_govern`、`title_gen`）或 `BEFORE_AGENT_RUN` hook（`mcp`、`skill`）参与 Agent 生命周期；`mcp` 额外注册 HTTP 路由和 MCP 工具，`skill` 注册 `loadSkill` 工具和 HTTP 路由。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `CompactHandler.maybe_schedule_idle_compact()` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
 
 ## 校对记录
 
