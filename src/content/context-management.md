@@ -197,7 +197,7 @@ elif _t == "context_compact":
 
 ### context_compact_start
 
-准备或手动压缩开始。
+准备压缩开始。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -263,6 +263,10 @@ LLM 摘要生成并写入 `context_compact` 后发送。
 }
 ```
 
+兼容策略：
+- 旧字段 `threshold` 可作为 `compactThreshold` 的别名读取。
+- 旧 `context_compact` 事件缺少 `enabled` 时按 `enabled=true` 处理。
+- `context_compact_start` / `done` / `failed` / `enabled` 都可能携带 `silent=true`；自动压缩默认取 `config.context.silent`，手动 `/compact` 默认 `silent=false`。
 兼容策略：
 - 旧字段 `threshold` 可作为 `compactThreshold` 的别名读取。
 - 旧 `context_compact` 事件缺少 `enabled` 时按 `enabled=true` 处理。
