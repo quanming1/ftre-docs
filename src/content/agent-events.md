@@ -196,7 +196,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 
 ### tool_cancel_requested / tool_cancelled
 
-这两个事件类型曾在 `AgentLoop.PERSISTENT_EVENTS`（已改为 `_PERSISTENT_CLASSES`）中被列出，但不在 `EventType` 枚举中，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
+这两个事件类型当前**不在任何代码路径中**——既不在 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 的 `EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:373-382`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
 
 - 取消最终通过 `done(success=false, reason="cancelled")` 表达；如果工具任务被取消/中断，可能额外产出 `tool_result(status="cancelled")`，但不应依赖每次取消都有 cancelled 状态的 `tool_result`。
 - 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。

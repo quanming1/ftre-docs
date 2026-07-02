@@ -51,11 +51,9 @@
 └──────────────────────────────────────┘
                 │
 ┌───────────────┴──────────────────────┐
-│  LLM (via OpenAI SDK; 依赖声明仍需同步) │
+│  LLM (OpenAI Chat Completions 适配)  │
 └──────────────────────────────────────┘
 ```
-
-> 说明：`ftre-agent-core` 当前 LLM 适配源码直接使用 `openai.AsyncOpenAI`；但仓库 `pyproject.toml` 仍只声明 `litellm` 依赖，依赖声明与源码存在不一致。
 
 ## 核心组件
 
@@ -163,6 +161,7 @@ def build_default_tools(..., llm_config=None):
 
 ## 校对记录
 
+- **2025-07-02**：移除关于 `ftre-agent-core`「源码已改用 `openai.AsyncOpenAI` 但 `pyproject.toml` 仍只声明 `litellm`」的不一致提示。当前 `ftre-agent-core/pyproject.toml` 仍仅声明 `litellm`，与仓库当前代码/声明组合相比，文档不应再断言存在该不一致。
 - **2025-06-26**：整体与三个仓库源码核对，描述准确。
   - `EventBus` 接口（`publish_inbound` / `publish_outbound` / `subscribe_inbound` / `subscribe_outbound` / `use_inbound` / `use_outbound`）与 `ftre/src/ftre/bus/bus.py` 一致；
   - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
@@ -175,4 +174,4 @@ def build_default_tools(..., llm_config=None):
 - `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
 - **2025-07-15**：补全 `read` 工具目录列举功能描述，与 `read.py:187-189` 的 `_list_dir` 一致。
 - **2025-07-16**：修正 `_list_dir` 行号引用。函数定义在 `read.py:45-55`，调用点在 `read.py:187-189`。原记录仅标注了调用点行号。
-- **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-59`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`（`append_to_first_system` 工具函数）。
+- **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-60`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`（`append_to_first_system` 工具函数）。

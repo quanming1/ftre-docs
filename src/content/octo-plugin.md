@@ -85,7 +85,9 @@ shim 通过 `importlib.util` 在加载实际模块前将 `octo-plugin/` 加入 `
 
 1. `uids` 字段直接 @bot uid → 触发
 2. `ais=1`（@AI）→ 触发（但受广播抑制）
-3. 文本内容正则匹配 `@ftre开发` → 兜底触发
+3. 文本内容正则匹配 `@<bot_name>`（即 `@<bot名称>`） → 兜底触发
+
+> 兜底匹配的 `bot_name` 默认取 `bot_id`，可通过 `plugins[].config.bot_name` 显式配置。
 
 #### 广播抑制
 

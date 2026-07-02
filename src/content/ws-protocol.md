@@ -174,7 +174,7 @@
 
 > **注意区分 `id` 和 `event_id`**：`id` 是 WS 帧 ID，仅用于 `user_message` echo 去重（前端自己发的消息不再渲染第二次）；`event_id` 是事件 ID，用于所有事件的统一去重（HTTP / WS live / WS replay 三路）。两者职责不同，不可混用。
 
-**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件，并短暂保留刚入库的稳定事件（如 `assistant_message_complete` / `tool_call` / `tool_result`）来覆盖 HTTP history 与 WS attach 之间的 race。客户端 attach 时先补发这些缓存，再继续接收 live 流。重复帧由 `event_id` 在前端 reducer 统一去重。
+**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming` / `context_compact_start`），覆盖 HTTP history 与 WS attach 之间的 race。客户端 attach 时先补发这些缓存，再继续接收 live 流。重复帧由 `event_id` 在前端 reducer 统一去重。
 
 ### 事件类型完整列表
 
@@ -320,7 +320,7 @@
 
 #### tool_cancel_requested / tool_cancelled
 
-这两个类型曾在 `AgentLoop.PERSISTENT_EVENTS`（已改为 `_PERSISTENT_CLASSES`）中被列出，但它们不在 `ftre-agent-core.agent.event.EventType` 中，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
+这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:373-382`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
 注意：`tool_timed_out` 不在 `_PERSISTENT_CLASSES` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
@@ -513,7 +513,7 @@
 - `context_compact_enabled`：不渲染气泡，只触发 token usage 刷新
 - `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
 
-**注意**：这些实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop._PERSISTENT_CLASSES` 白名单内，不经过 AgentLoop 持久化路径（`context_compact` 事件本身由 `CompactHandler.compact()` 直接调用 `save_message()` 写入 DB）。桌面端 `ChatHeader` 的归档/压缩菜单当前调用 `POST /api/sessions/{id}/compact`，但后端尚未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+**注意**：这些实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop._PERSISTENT_CLASSES` 白名单内，不经过 AgentLoop 持久化路径（`context_compact` 事件本身由 `CompactHandler.compact()` 直接调用 `save_message()` 写入 DB）。桌面端 `triggerCompaction()` 仍会调用 `POST /api/sessions/{id}/compact`（`packages/renderer/src/services/api.ts:451-467`），但后端当前源码里仍未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 
 #### context_compact — 历史回放专用
 
@@ -817,3 +817,4 @@
     - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-293`）；
    - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
  - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:456-470`。
+- **2026-07-01**：修正 Volatile Replay Buffer 描述。原文称 buffer「短暂保留刚入库的稳定事件」，但源码中 `VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}`（`channel/ws_channel.py:52-57`）只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_call` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE`（`channel/ws_channel.py:60-67`）触发清理而非进入 buffer。已删除「短暂保留稳定事件」的错误表述。

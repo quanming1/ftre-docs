@@ -31,7 +31,7 @@ ftre 支持 MCP（Model Context Protocol），让 Agent 能调用外部工具服
 | `type` | ✅ | `"local"` |
 | `command` | ✅ | 启动命令，首位可执行文件，后续为参数 |
 | `environment` |  | 环境变量 dict |
-| `disabled` |  | `true` 时跳过连接；解析器也兼容旧式 `enabled: false`，但 CRUD API 写回统一使用 `disabled` |
+| `disabled` |  | `true` 时跳过连接；当前 CRUD API 与 `_validate_mcp_server()` 校验/写回统一使用 `disabled` |
 | `timeout` |  | 毫秒，默认 30000 |
 
 ### remote（远程 HTTP）
@@ -59,7 +59,7 @@ ftre 支持 MCP（Model Context Protocol），让 Agent 能调用外部工具服
 | `type` | ✅ | `"remote"` |
 | `url` | ✅ | HTTP endpoint |
 | `headers` |  | 请求头 dict |
-| `disabled` |  | `true` 时跳过连接；解析器也兼容旧式 `enabled: false`，但 CRUD API 写回统一使用 `disabled` |
+| `disabled` |  | `true` 时跳过连接；当前 CRUD API 与 `_validate_mcp_server()` 校验/写回统一使用 `disabled` |
 | `timeout` |  | 毫秒，默认 30000 |
 
 ## 工具调用
@@ -162,9 +162,9 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
 ## 校对记录
 
 - **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/mcp_plugin.py` / `ftre/src/ftre/mcp/manager.py` 核对，描述准确。
-   - `local` / `remote` 类型配置字段（`type` / `command` / `environment` / `disabled` / `timeout`；`remote` 用 `url` / `headers` 替代 `command` / `environment`）与 `_validate_mcp_server`（`mcp_plugin.py:198-241`）一致；启动解析器 `parse_mcp_config()` 还兼容 `enabled: false` 作为禁用写法；
+   - `local` / `remote` 类型配置字段（`type` / `command` / `environment` / `disabled` / `timeout`；`remote` 用 `url` / `headers` 替代 `command` / `environment`）与 `_validate_mcp_server`（`mcp_plugin.py:199-241`）一致；当前 `mcp_plugin.py` 的 CRUD 校验/写回路径不处理 `enabled: false` 兼容写法；
   - `timeout` 默认 `30_000` ms（30 秒），文档示例中的 `60000`（60 秒）仅为自定义示例；
-   - MCP 工具命名格式 `mcp__{server}__{tool}` 与 `mcp_plugin.py:51-59` 中 `_inject_system_prompt` 通过 `BEFORE_AGENT_RUN` hook 调用 `append_to_first_system(ctx.messages, ...)` 注入内容一致；
-   - MCP CRUD 路由（`GET/POST /api/mcp`、`PATCH/DELETE /api/mcp/{name}`）由 `mcp_plugin.py:71-158` 通过 `APIRouter(prefix="/mcp")` 注册；`WebSocketChannel` 在 `ws_channel.py:349,354` 统一为插件路由器添加 `/api` 前缀，最终路径为 `/api/mcp*`；
+   - MCP 工具命名格式 `mcp__{server}__{tool}` 与 `mcp_plugin.py:51-60` 中 `_inject_system_prompt` 通过 `BEFORE_AGENT_RUN` hook 调用 `append_to_first_system(ctx.messages, ...)` 注入内容一致；
+   - MCP CRUD 路由（`GET/POST /api/mcp`、`PATCH/DELETE /api/mcp/{name}`）由 `mcp_plugin.py:72-159` 通过 `APIRouter(prefix="/mcp")` 注册；`WebSocketChannel` 在 `ws_channel.py:349,354` 统一为插件路由器添加 `/api` 前缀，最终路径为 `/api/mcp*`；
   - config watcher 与 3 秒兜底轮询在 `McpManager.start_config_watcher()` 中实现；
   - 前端设置入口（标题栏 🔌 按钮 + `SettingsDialog` 的 `section: "mcp"`）与桌面端 UI 描述一致。

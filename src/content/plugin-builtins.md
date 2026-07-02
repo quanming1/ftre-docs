@@ -99,12 +99,12 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 - **2025-06-26**：与 `ftre/src/ftre/plugin/builtin/*.py` 完整核对，描述准确。
   - 4 个内置插件（`title_gen` / `context_govern` / `skill` / `mcp`）与 `ftre/src/ftre/plugin/builtin/` 目录一致；
-  - `context_govern` 六项能力（孤立事件清理 / tool_call 去重 / 相邻性修复 / 悬挂 tool_result / AGENTS.md 注入 / 用户自定义提示词注入）与 `context_govern.py:23-46` 一致；
+  - `context_govern` 的治理流程与注入能力（孤立事件清理 / tool_call 去重 / 相邻性修复 / 悬挂 tool_result / AGENTS.md 注入 / 用户自定义提示词注入）与 `context_govern.py:23-46` 一致；
   - `AGENTS_RULE` 与 `USER_CUSTOM_PROMPT` 标签的 XML 包裹格式与 `context_govern.py:50-97` 一致；
   - `title_gen` 默认配置（`DEFAULT_INPUT_TRUNCATE = 1000`、`DEFAULT_MAX_CHARS = 40`、`DEFAULT_SYSTEM_PROMPT`）与 `title_gen.py:24-29` 一致；通过 `before_messages_build` 判断首条消息（`ctx.events` 为空 + session 无 title），worker 线程中调用 `LLMHandler.stream` 生成标题；
   - `mcp` 插件在 `setup()` 中注册 `BEFORE_AGENT_RUN` hook，hook 函数 `_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾；`self.api.register_router(self._build_router())` 注册 `/mcp` 前缀路由（最终路径为 `/api/mcp`）；`loop.call_soon_threadsafe(asyncio.create_task, self._start_connections())` 异步启动 MCP 连接；
-   - MCP `local` / `remote` 配置校验在 `_validate_mcp_server`（`mcp_plugin.py:198-241`）；`timeout` 默认 `30_000` ms（即 30 秒），与代码一致；
+   - MCP `local` / `remote` 配置校验在 `_validate_mcp_server`（`mcp_plugin.py:199-241`）；`timeout` 默认 `30_000` ms（即 30 秒），与代码一致；
    - `skill` 插件默认目录 `~/.ftre/skills`，支持 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 三种形式（`skill_plugin.py:276-278,341-343`）；
   - 上下文压缩功能已迁出插件：原 `context_compact.py` 插件不再存在；`CompactHandler` 在 `ftre/src/ftre/agent/compact_handler.py`；`/compact` 在 `AgentLoop._register_commands()` 注册为普通指令。
-- **2025-07-18**：修正 mcp 插件的 hook 描述。`mcp_plugin.py:36` 实际注册 `BEFORE_AGENT_RUN`，`_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾。同步修正第 4 节「通用约定」中 "mcp 不注册 hook" 的错误表述。源码依据：`mcp_plugin.py:19,36,51-59`。
+- **2025-07-18**：修正 mcp 插件的 hook 描述。`mcp_plugin.py:36` 实际注册 `BEFORE_AGENT_RUN`，`_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾。同步修正第 4 节「通用约定」中 "mcp 不注册 hook" 的错误表述。源码依据：`mcp_plugin.py:19,36,51-60`。
 - **2025-12-18**：修正 skill 插件 hook 描述。`skill_plugin.py:49` 实际注册 `BEFORE_AGENT_RUN`，skill 的 `_inject_system_prompt` 同时注入 `<skill_desc>` 和 `<skill_list>`（通过 `append_to_first_system(ctx.messages, ...)` 追加到第一条 system 消息末尾），非两个独立 hook。同步修正校对记录中 mcp 的 hook 描述。

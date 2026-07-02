@@ -111,10 +111,10 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
 | `provider` | string | 是 | 默认 Provider 名，对应 `providers` 的 key |
-| `model` | string | 是 | 默认模型 ID。仅当 `provider` 存在且 `model` 非空时，运行时才会把该 ID 作为实际 LLM `model` 传入；若 `providers[provider].models[]` 中存在同名条目，则额外读取其 `name` / `context_window` / `max_output` / `vision` 等元数据。Provider 存在但找不到模型条目时仍会使用该 `model`，只是这些元数据为空/默认值；Provider 不存在或 model 为空时会得到空 LLM 配置 |
+| `model` | string | 是 | 默认模型 ID。仅当 `provider` 存在且 `model` 非空时，运行时才会把该 ID 作为实际 LLM `model` 传入；若 `providers[provider].models[]` 中存在同名条目，则额外读取其 `name` / `context_window` / `max_output` / `vision` 等元数据。Provider 存在但找不到模型条目时会得到空的 model 条目元数据（`name` 为空、`context_window` / `max_output` 为 `None`、`vision=false`），但 `LLMConfig.model` 仍会使用该 `model`；Provider 不存在或 model 为空时会得到空 LLM 配置 |
 | `workspace` | string | 否 | 默认工作区。该值会写入 `AgentConfig.workspace`；但当前 `AgentLoop._run_async()` 在执行时仍按 `session.workspace` → 进程 cwd 的顺序选择工作区（`session.get("workspace", "") or os.getcwd()`），不会直接读取 `AgentConfig.workspace`。`set_workspace` / 纯 `cd` 持久切换最终都会把当前 session 的 `workspace` 写回数据库 |
-| `title_generation` | object | 否 | 标题生成专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会构造 `AgentConfig.title_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，标题生成仍会使用该 model，只是展示和能力元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型，回退主 LLM |
-| `compact_generation` | object | 否 | 上下文压缩专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会构造 `AgentConfig.compact_llm`。`CompactHandler._run_compact_llm()` 执行摘要时会优先使用 `config.compact_llm`，未配置则回退到 `config.llm`。设计动机：压缩是后台高频长上下文调用，可用便宜/大窗口模型降低成本 |
+| `title_generation` | object | 否 | 标题生成专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会尝试构造 `AgentConfig.title_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，则 `_build_llm_config()` 产出的 `built.model` 仍非空，因此当前实现仍会启用该标题模型，只是展示和能力元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型，回退主 LLM |
+| `compact_generation` | object | 否 | 上下文压缩专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会尝试构造 `AgentConfig.compact_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，则 `_build_llm_config()` 产出的 `built.model` 仍非空，因此当前实现仍会启用该压缩模型，只是展示和能力元数据为空/默认值。`CompactHandler._run_compact_llm()` 执行摘要时会优先使用 `config.compact_llm`，未配置则回退到 `config.llm`。设计动机：压缩是后台高频长上下文调用，可用便宜/大窗口模型降低成本 |
 | `system_prompt` | string | 否 | 自定义系统提示词。不配则自动从 `src/ftre/system_prompt.md` 加载内置提示词。配置后完全覆盖内置提示词，不会合并 |
 | `user_prompt` | string | 否 | 用户自定义提示词。客户端设置，存于 `config.json`。与内置 system_prompt 分离，由 `context_govern` 插件在每轮构建消息时以 `<USER_CUSTOM_PROMPT>` 标签注入 system_prompt 末尾。详见 [内置插件 — context_govern](/docs/plugin-builtins#2-context_govern--上下文治理) |
 
@@ -123,7 +123,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `provider` | string | Provider 名 |
-| `model` | string | 标题生成模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时仍会启用该标题模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型 |
+| `model` | string | 标题生成模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时当前实现仍会启用该标题模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型 |
 
 > 标题生成是高频小请求，建议指向便宜/快的模型（如 `gpt-4o-mini`），避免占用主对话的高级模型配额。
 
@@ -132,7 +132,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `provider` | string | Provider 名 |
-| `model` | string | 压缩摘要模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时仍会启用该压缩模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用压缩模型，回退主 LLM |
+| `model` | string | 压缩摘要模型 ID；仅当 `provider` 存在且 model 非空时，会直接作为实际 LLM `model` 传入。若该 Provider 的 `models[].id` 中存在同名条目，则读取其展示和能力元数据；找不到模型条目时当前实现仍会启用该压缩模型，只是这些元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用压缩模型，回退主 LLM |
 
 > 上下文压缩是后台高频长上下文调用，建议指向便宜/大窗口模型以降低成本，避免占用主对话的高级模型配额。配置示例：`{"compact_generation": {"provider": "openai", "model": "gpt-4o-mini"}}`。
 
