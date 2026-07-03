@@ -14,7 +14,7 @@ ftre 是一个 AI 编程助手平台，由以下组件构成：
 
 | 路径 | 说明 |
 |------|------|
-| `~/.ftre/config.json` | LLM Provider、Model、默认 Workspace、可选标题生成模型与压缩模型、Gateway / 前端 dev 端口等配置；`agents.defaults.title_generation` / `compact_generation` 会分别解析为 `AgentConfig.title_llm` / `compact_llm`；`agents.defaults.workspace` 会写入 `AgentConfig.workspace`，但实际运行时工作区优先级仍以 session 自身 `workspace` 字段为准；Gateway 监听 host / port 从 `servers.gateway` 读取，缺省 `127.0.0.1:48650` |
+| `~/.ftre/config.json` | LLM Provider、Model、可选标题生成模型与压缩模型、上下文管理配置、全局默认工作区（`default_workspace`）、Gateway / 前端 dev 端口等配置；`agents.title_generation` / `compact_generation` 会分别解析为 `AgentConfig.title_llm` / `compact_llm`；默认 LLM（provider / model）不在 `config.json` 配置，而是由 `~/.ftre/agents/default/agent.config.json` 持有；Agent 的 `workspace` 字段语义为"家目录"（存放提示词文件的路径），不参与 session 的 cwd 决定；session 运行时 cwd 优先级链为 `session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()`；Gateway 监听 host / port 从 `servers.gateway` 读取，缺省 `127.0.0.1:48650` |
 | `~/.ftre/plugins/` | 外部插件目录（Python），用于扩展；内置插件（`skill`、`mcp`、`context_govern`、`title_gen`）随代码仓库发布在 `src/ftre/plugin/builtin/`，Gateway 先加载内置插件再扫描此目录 |
 | `~/.ftre/skills/` | Skill 目录（Markdown），可复用能力说明 |
 | `~/.ftre/cron/` | 定时任务目录（JSON），每个任务一个 `job_xxx.json` 文件 |

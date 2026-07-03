@@ -13,15 +13,23 @@
 
 ```json
 {
+  "default_workspace": "E:\\binn",
   "agents": {
-    "defaults": {
+    "title_generation": {
       "provider": "openai",
-      "model": "gpt-4o",
-      "workspace": "E:\\projects",
-      "title_generation": {
-        "provider": "openai",
-        "model": "gpt-4o-mini"
-      }
+      "model": "gpt-4o-mini"
+    },
+    "compact_generation": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "context": {
+      "precompactThreshold": 0.5,
+      "compactThreshold": 0.6,
+      "consolidationRatio": 0.5,
+      "safetyBuffer": 1024,
+      "idleCompaction": true,
+      "silent": true
     }
   },
   "providers": {
@@ -99,24 +107,32 @@
 
 ```
 {
-  agents        → Agent 默认配置
-  providers     → LLM Provider 列表
-  plugins       → 插件配置
-  servers       → Gateway / 前端 / 文档开发服务端口配置
+  default_workspace → 全局默认工作区（创建新 session 时的预填值）
+  agents            → Agent 全局配置（title_generation / compact_generation / context）
+  providers         → LLM Provider 列表
+  plugins           → 插件配置
+  servers           → Gateway / 前端 / 文档开发服务端口配置
 }
 ```
 
-## agents.defaults
+## default_workspace
+
+全局默认工作区路径。创建新 session 时作为预填值写入 session 的 `workspace` 字段。不配置时回退到进程 cwd。
+
+```json
+"default_workspace": "E:\\binn"
+```
+
+> **注意**：此字段与 `agent.config.json` 的 `workspace` 是不同概念。`agent.config.json` 的 `workspace` 是 Agent 的"家目录"（存放 SOUL.md / AGENTS.md / USER.md 的路径），不参与 session 的 cwd 决定。session 运行时的 cwd 优先级链为：`session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()`。
+
+## agents
+
+`agents` 段配置标题生成模型、压缩模型与上下文管理参数。默认 LLM（provider / model）不在 `config.json` 中配置，而是由 `~/.ftre/agents/default/agent.config.json` 持有；系统提示词从 `src/ftre/system_prompt.md` 加载；用户偏好提示词从 `~/.ftre/agents/default/USER.md` 读取（由 `agent_manager.py` 注入为 `<USER_PROFILE>` 标签）。全局默认工作区由顶层 `default_workspace` 字段配置，不在 `agents` 段内。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `provider` | string | 是 | 默认 Provider 名，对应 `providers` 的 key |
-| `model` | string | 是 | 默认模型 ID。仅当 `provider` 存在且 `model` 非空时，运行时才会把该 ID 作为实际 LLM `model` 传入；若 `providers[provider].models[]` 中存在同名条目，则额外读取其 `name` / `context_window` / `max_output` / `vision` 等元数据。Provider 存在但找不到模型条目时会得到空的 model 条目元数据（`name` 为空、`context_window` / `max_output` 为 `None`、`vision=false`），但 `LLMConfig.model` 仍会使用该 `model`；Provider 不存在或 model 为空时会得到空 LLM 配置 |
-| `workspace` | string | 否 | 默认工作区。该值会写入 `AgentConfig.workspace`；但当前 `AgentLoop._run_async()` 在执行时仍按 `session.workspace` → 进程 cwd 的顺序选择工作区（`session.get("workspace", "") or os.getcwd()`），不会直接读取 `AgentConfig.workspace`。`set_workspace` / 纯 `cd` 持久切换最终都会把当前 session 的 `workspace` 写回数据库 |
 | `title_generation` | object | 否 | 标题生成专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会尝试构造 `AgentConfig.title_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，则 `_build_llm_config()` 产出的 `built.model` 仍非空，因此当前实现仍会启用该标题模型，只是展示和能力元数据为空/默认值；Provider 不存在或 provider/model 为空时不启用标题模型，回退主 LLM |
-| `compact_generation` | object | 否 | 上下文压缩专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会尝试构造 `AgentConfig.compact_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，则 `_build_llm_config()` 产出的 `built.model` 仍非空，因此当前实现仍会启用该压缩模型，只是展示和能力元数据为空/默认值。`CompactHandler._run_compact_llm()` 执行摘要时会优先使用 `config.compact_llm`，未配置则回退到 `config.llm`。设计动机：压缩是后台高频长上下文调用，可用便宜/大窗口模型降低成本 |
-| `system_prompt` | string | 否 | 自定义系统提示词。不配则自动从 `src/ftre/system_prompt.md` 加载内置提示词。配置后完全覆盖内置提示词，不会合并 |
-| `user_prompt` | string | 否 | 用户自定义提示词。客户端设置，存于 `config.json`。与内置 system_prompt 分离，由 `context_govern` 插件在每轮构建消息时以 `<USER_CUSTOM_PROMPT>` 标签注入 system_prompt 末尾。详见 [内置插件 — context_govern](/docs/plugin-builtins#2-context_govern--上下文治理) |
+| `compact_generation` | object | 否 | 上下文压缩专用 LLM。不配则沿用主 LLM；只有 provider 存在且 model 非空时才会尝试构造 `AgentConfig.compact_llm`。若 Provider 存在但对应 `models[]` 中没有同名条目，则 `_build_llm_config()` 产出的 `built.model` 仍非空，因此当前实现仍会启用该压缩模型，只是展示和能力元数据为空/默认值。`CompactManager._run_compact_llm()` 执行摘要时会优先使用 `config.compact_llm`，未配置则回退到 `config.llm`。设计动机：压缩是后台高频长上下文调用，可用便宜/大窗口模型降低成本 |
 
 ### title_generation（可选）
 
@@ -155,7 +171,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 是 | 模型条目 ID，用于与 `agents.defaults.model` / `title_generation.model` 匹配以补充展示和能力元数据。`_build_model_name()` 直接返回配置里的模型名，不做前缀拼接 |
+| `id` | string | 是 | 模型条目 ID，用于与 `agent.config.json` 的 `llm.model` / `agents.title_generation.model` 匹配以补充展示和能力元数据。`_build_model_name()` 直接返回配置里的模型名，不做前缀拼接 |
 | `name` | string | 否 | 展示名称 |
 | `context_window` | int | 后端否 / 桌面端 UI 是 | 上下文窗口大小（token 数）；后端缺省时为 `None`，桌面端 ModelSettings UI 保存时当前要求填写正数 |
 | `max_output` | int | 后端否 / 桌面端 UI 是 | 最大输出 token 数；后端缺省时为 `None`，桌面端 ModelSettings UI 保存时当前要求填写正数 |
@@ -163,11 +179,11 @@
 
 #### 模型 ID 命名规则
 
-`agents.defaults.model` / `title_generation.model` 填写 Provider 端点所识别的原始模型名。当前 `ftre` 使用 OpenAI SDK 通过 `api_base` 指向兼容端点，`_build_model_name()` 函数直接返回该模型名（不做任何前缀拼接）。`providers[].models[].id` 主要用于前端展示，以及供后端匹配并补充 `name` / `context_window` / `max_output` / `vision` 等元数据；只要 Provider 存在且模型 ID 非空，即使没有匹配条目，`_build_llm_config()` 仍会使用配置中的模型 ID 构造 `LLMConfig.model`，只是这些元数据为空/默认值。Provider 不存在或模型 ID 为空时会返回空 LLM 配置。注意桌面端 ModelSettings UI 当前只能从 `models[]` 中选择默认模型/标题模型，因此通过 UI 操作时通常仍需先把模型写入列表：
+`agent.config.json` 的 `llm.model` / `agents.title_generation.model` 填写 Provider 端点所识别的原始模型名。当前 `ftre` 使用 OpenAI SDK 通过 `api_base` 指向兼容端点，`_build_model_name()` 函数直接返回该模型名（不做任何前缀拼接）。`providers[].models[].id` 主要用于前端展示，以及供后端匹配并补充 `name` / `context_window` / `max_output` / `vision` 等元数据；只要 Provider 存在且模型 ID 非空，即使没有匹配条目，`_build_llm_config()` 仍会使用配置中的模型 ID 构造 `LLMConfig.model`，只是这些元数据为空/默认值。Provider 不存在或模型 ID 为空时会返回空 LLM 配置。注意桌面端 ModelSettings UI 当前只能从 `models[]` 中选择默认模型/标题模型，因此通过 UI 操作时通常仍需先把模型写入列表：
 
 - 使用 OpenAI 兼容端点时，可直接填 `gpt-4o`、`deepseek-v4-pro` 等；建议在 `models[].id` 中放置同名条目，以便前端展示并让后端读取上下文窗口、视觉能力等元数据
 
-## agents.defaults.context
+## agents.context
 
 上下文压缩配置。缺省即可启用单阈值自动管理（统一使用 `precompact_threshold` 0.5 作为触发水位；`compact_threshold` 0.6 当前仅作为事件元数据记录，不参与触发决策）：
 
@@ -220,11 +236,14 @@
   - `api_protocol` 默认 `"openai"`（`config.py:166`），`_build_model_name()` 直接返回 `model_id`（`config.py:140-141`），不影响 `LLMConfig.api_type`；
   - `LLMConfig.api_type` 始终为 dataclass 默认 `"completions"`（`config.py:47`），实际走 OpenAI Chat Completions 流式适配；
   - `title_generation` / `compact_generation` / `user_prompt` / `context` 段读取与 `config.py:208-263` 的 `_f("camelCase", "snake_case", default)` 双键兼容逻辑一致；
-  - `agents.defaults.workspace` 在 `load_config()` 中读取并写入 `AgentConfig.workspace`；运行时 `AgentLoop._run_async` 通过 `session.get("workspace", "") or os.getcwd()` 选择工作区（`agent/loop.py:447`），session workspace 优先级最高；
+  - `agents.defaults.workspace` 在 `load_config()` 中读取并写入 `AgentConfig.workspace`；运行时 `AgentLoop._run_async` 通过 `session.get("workspace", "") or os.getcwd()` 选择工作区（`agent/loop.py:468`），session workspace 优先级最高；
   - `agents.defaults.context` 所有字段（`precompactThreshold` / `compactThreshold` / `consolidationRatio` / `safetyBuffer` / `idleCompaction` / `silent`）与 `ContextConfig` dataclass 一致；
   - `servers.gateway` 默认 `127.0.0.1:48650`，`servers.frontend` 默认 `48651`（由 `ftre/start.py` 与 `ftre-desktop/scripts/resolve-port.mjs` 读取）；
   - 文档站端口 `48652` 由 `E:\ftre-docs\scripts\dev.mjs` 读取并通过 `npx vite --port ${port}` 启动（`scripts/dev.mjs`）；
   - `plugins[]` 仅用于同名插件配置注入；`PluginManager.load_all()` 内部先加载内置插件再扫描 `~/.ftre/plugins/`（`plugin/plugin.py:174-211`）；
-   - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:338`）、`_run_async`（`agent/loop.py:421`）、`_cmd_compact`（`agent/loop.py:172`）、usage_update 路径（`agent/loop.py:566`）和 idle 路径（`agent/loop.py:624`，调用 `CompactHandler.maybe_schedule_idle_compact()`）；另在 `__init__` 的 `_initial_context_cfg`（`agent/loop.py:129`）也被调用——与本文描述一致。
+   - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:363`）、`_run_async`（`agent/loop.py:446`）、`_cmd_compact`（`agent/loop.py:172`）、usage_update 路径（`agent/loop.py:591`）和 idle 路径（`agent/loop.py:649`，调用 `CompactManager.maybe_schedule_idle_compact()`）；另在 `__init__` 的 `_initial_context_cfg`（`agent/loop.py:129`）也被调用——与本文描述一致。
 - **2025-07-11**：补全 `agents.defaults` 表格中缺失的 `system_prompt` 和 `user_prompt` 字段。源码依据：`config.py:236-243`（`load_config()` 中读取 `system_prompt` / `user_prompt`），`context_govern.py:50-63`（`user_prompt` 注入逻辑）。
-- **2026-07-02**：代码重构后复验。`_schedule_idle_compact` 已从 `AgentLoop` 移除，后台压缩调度改由 `CompactHandler.maybe_schedule_idle_compact()` 承担。`_load_current_config()` 的调用时机不变，仍在 `_step_compact`（`loop.py:338`）、`_run_async`（`loop.py:421`）、`_cmd_compact`（`loop.py:172`）、usage_update 路径（`loop.py:566`）和 idle 路径（`loop.py:624`）中调用；正文描述仍准确。
+- **2026-07-02**：代码重构后复验。`_schedule_idle_compact` 已从 `AgentLoop` 移除，后台压缩调度改由 `CompactManager.maybe_schedule_idle_compact()` 承担。`_load_current_config()` 的调用时机不变，仍在 `_step_compact`（`loop.py:363`）、`_run_async`（`loop.py:446`）、`_cmd_compact`（`loop.py:172`）、usage_update 路径（`loop.py:591`）和 idle 路径（`loop.py:649`）中调用；正文描述仍准确。
+- **2026-07-03**：复验 `_load_current_config()` 调用点行号。代码持续演进后行号偏移，以下为当前正确行号：`_initial_context_cfg`（`loop.py:131`）、`_cmd_compact`（`loop.py:174`）、`_step_compact`（`loop.py:365`）、`_run_async`（`loop.py:454`）、usage_update 路径（`loop.py:612`）、idle 路径（`loop.py:670`）。另：`api_protocol` 默认 `"openai"` 在 `config.py:170`；`_build_model_name()` 在 `config.py:144-145`；`LLMConfig.api_type` 默认 `"completions"` 在 `config.py:51`；`session.get("workspace", "") or os.getcwd()` 在 `loop.py:482`。正文描述仍准确。
+- **2026-07-18**：修正配置路径。`config.json` 的 `agents` 段不存在 `defaults` 子层：`title_generation` / `compact_generation` / `context` 直接挂在 `agents` 下（`config.py:262` / `:274` / `:287`）。`provider` / `model` / `workspace` 已迁移到 `~/.ftre/agents/default/agent.config.json`（`config.py:36-56` `_read_default_agent_llm()`），不再从 `config.json` 读取。`system_prompt` 从 `system_prompt.md` 文件加载（`config.py:284`），不在 `config.json` 配置。`user_prompt`（`USER.md`）由 `agent_manager.py:172` 从 agent 目录读取、`:622-629` 注入为 `<USER_PROFILE>` 标签，同样不在 `config.json` 配置。已删除 `agents.defaults` 表格中的 `provider` / `model` / `workspace` / `system_prompt` / `user_prompt` 行，JSON 示例同步修正。
+- **2026-07-03（workspace 分离）**：`config.json` 新增顶层 `default_workspace` 字段，作为创建新 session 时的预填值。`load_config()` 不再从 default agent 的 `agent.config.json` 读取 `workspace`，改为从 `config.json` 的 `default_workspace` 读取（`config.py:250-254`）。`agent.config.json` 的 `workspace` 字段语义变更为 Agent 的"家目录"（存放 SOUL/AGENTS/USER.md 的路径），不参与 session 的 cwd 决定。`loop.py` 删除 `agent_profile.workspace` 覆盖 `config.workspace` 和 `session workspace` 的逻辑（原 `loop.py:459-460` / `483-484`）。session 运行时 cwd 优先级链改为：`session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()`。前端 `WorkspaceBadge.tsx` / `chat.ts` 的默认工作区读取从 `cfg.agents.defaults.workspace` 改为 `cfg.default_workspace`。
