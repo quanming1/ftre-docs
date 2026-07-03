@@ -15,7 +15,8 @@ CommandManager 支持两级指令：
 ```python
 if await cmd.try_dispatch_system(data): return   # 锁外，系统级
 # ...获取 session lock...
-if not await cmd.try_dispatch(data): return       # 锁内，普通级
+cmd_def = await cmd.try_dispatch(data)            # 锁内，普通级
+if cmd_def is not None: return                    # 匹配到，短路
 ```
 
 ---
@@ -25,7 +26,7 @@ if not await cmd.try_dispatch(data): return       # 锁内，普通级
 | 指令 | 层级 | 参数 | 说明 | 注册位置 |
 |------|------|------|------|---------|
 | `/cancel` | 系统级（`system=True`） | 无 | 取消当前 session 正在执行的 Agent。handler 直接调用 `agent.cancel_nowait()` 和 `task.cancel()`，被取消的 Agent（或 task）产出 `done(success=false, reason="cancelled")` 作为最终信号 | `AgentLoop._register_commands()` |
-| `/compact` | 普通级 | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 async 方式直接 await 执行压缩：先 emit `session_status("compacting")`，再 `await compact_handler.enable_pending_compact()`，没有 pending 则 `await compact_handler.compact(enabled=True, silent=False)`，最后 emit `session_status(...)` 收尾（通常是 `idle`，因 `_compacting_sessions` 在 finally 中先被清掉再发状态）。命中后 `_step_command` 返回 `False` 短路终止 Pipeline，指令文本不送入 Agent | `AgentLoop._register_commands()` |
+| `/compact` | 普通级 | 无 | 手动触发上下文压缩。handler（`_cmd_compact`）以 async 方式直接 await 执行压缩：先 emit `session_status("compacting")`，再 `await compact_manager.enable_pending_compact()`，没有 pending 则 `await compact_manager.compact(enabled=True, silent=False)`，最后 emit `session_status(...)` 收尾（通常是 `idle`，因 `_compacting_sessions` 在 finally 中先被清掉再发状态）。命中后 `_step_command` 返回 `False` 短路终止 Pipeline，指令文本不送入 Agent | `AgentLoop._register_commands()` |
 
 > `/help` 等指令当前未注册。如需扩展，可在 `AgentLoop._register_commands()` 中追加普通级指令，或通过插件 `self.api.command_manager.register()` 注册（当前 `command_manager` 已注入 `PluginManager`，插件注册的指令会在 `GET /api/commands` 返回的列表中出现，并在 `_step_command` 中匹配）。未匹配任何注册指令的 `/` 开头输入会作为普通 `user_message` 送入 Agent。
 
@@ -84,9 +85,9 @@ cmd.register("/compact", handler, description="压缩当前会话上下文")    
 
 **派发：**
 - `try_dispatch_system(data)` — 从 data 提取文本，匹配系统级指令并执行。返回 `True` 表示命中
-- `try_dispatch(data)` — 从 data 提取文本，匹配普通级指令并执行。返回 `True` 表示命中
-- `dispatch_system(raw, meta=None)` — 低级 API，直接传文本匹配系统级指令（与 `dispatch` 对称）
-- `dispatch(raw, meta=None)` — 低级 API，直接传文本匹配普通级指令
+- `try_dispatch(data)` — 从 data 提取文本，匹配普通级指令并执行。返回 `CommandDef` 表示命中，未匹配返回 `None`
+- `dispatch_system(raw, meta=None)` — 低级 API，直接传文本匹配系统级指令（与 `dispatch` 对称）。返回 `bool`
+- `dispatch(raw, meta=None)` — 低级 API，直接传文本匹配普通级指令。返回 `bool`
 
 handler 通过 `ctx.meta` 回写结果。handler 可同步可异步（`async def`），异步 handler 会被 `await`。
 
@@ -147,10 +148,10 @@ self.command_manager.register(
 2. `ws_channel` 投递 BusMessage(type="user_message") 到 Bus
 3. `AgentLoop._consume()` → `create_task(_dispatch(data))`
 4. `_dispatch()`：`try_dispatch_system()` 不命中 → 获取 session lock → `pipeline.run(data)`
-5. `_step_command`：检测到 `/compact`，`try_dispatch()` 匹配 → 执行 `_cmd_compact` handler → handler async 直接 await 压缩 → 返回命中 → `_step_command` 返回 `False`（短路终止 Pipeline）
+5. `_step_command`：检测到 `/compact` → 先持久化 `user_message` 入库（`_step_command` 命中指令后先保存用户输入再执行 handler）→ `try_dispatch()` 匹配并执行 `_cmd_compact` handler → handler async 直接 await 压缩 → `_step_command` 返回 `False`（短路终止 Pipeline）
 6. `_step_compact` 和 `_step_run` 不再执行
 
-`/compact` 的用户输入**不会**入库 `user_message`，也**不会** echo 给前端。压缩结果通过 `CompactHandler._notify()` 异步发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_publish_session_status_async` 发送的 `session_status` 全局事件控制（`compacting` → `idle`）。
+`/compact` 的用户输入**会**入库 `user_message`（`_step_command` 命中后先持久化再执行 handler），但**不会** echo 给前端（echo 在 `_run_async` 的 Step 6.5 中，Pipeline 已短路跳过）。压缩结果通过 `CompactManager._notify()` 异步发送 `context_compact_start / context_compact_done / context_compact_failed` 实时事件，并写入 `enabled=true` 的 `context_compact` 持久化事件到 DB。前端的 busy 状态由 `_cmd_compact` 内的 `_publish_session_status_async` 发送的 `session_status` 全局事件控制（`compacting` → `idle`）。
 
 ---
 
@@ -170,4 +171,4 @@ self.command_manager.register(
 
 ## 校对记录
 
-- **2025-06-26**：补全 `CommandManager` 低级 API 描述。新增 `dispatch_system(raw, meta=None)`（系统级版本），与 `dispatch(raw, meta=None)`（普通级版本）对称。源码依据：`ftre/src/ftre/command/manager.py:116-122`。
+- **2025-06-26**：补全 `CommandManager` 低级 API 描述。新增 `dispatch_system(raw, meta=None)`（系统级版本），与 `dispatch(raw, meta=None)`（普通级版本）对称。源码依据：`ftre/src/ftre/command/manager.py:128-134`。

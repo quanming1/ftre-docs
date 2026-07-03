@@ -19,7 +19,7 @@ Gateway 启动后默认监听：
 >
 > 端口可通过 `~/.ftre/config.json` 的 `servers.gateway.port` 调整，缺省 `48650`。前端 dev 服务默认端口为 `48651`（由 `servers.frontend.port` 控制）。
 >
-> 注意：`ftre-agent-core` 当前 LLM 适配源码直接导入 `openai.AsyncOpenAI`，但 `pyproject.toml` 仍只声明了 `litellm` 依赖；如果全新环境按上述命令安装后缺少 `openai` 包，需要先补装或修正依赖声明。
+> `ftre-agent-core` 源码直接使用 `openai.AsyncOpenAI`，其 `pyproject.toml` 声明 `litellm` 依赖，而 `litellm` 自身依赖 `openai`，因此安装 `litellm` 后 `openai` 包会自动安装。
 
 Gateway 默认从 `~/.ftre/config.json` 的 `servers.gateway` 读取 host / port，缺省 `127.0.0.1:48650`。
 
@@ -39,13 +39,6 @@ pnpm dev
 
 ```json
 {
-  "agents": {
-    "defaults": {
-      "provider": "openai",
-      "model": "gpt-4o",
-      "workspace": "E:\\binn"
-    }
-  },
   "providers": {
     "openai": {
       "api_key": "sk-xxx",
@@ -65,6 +58,8 @@ pnpm dev
 }
 ```
 
+> 默认 LLM（provider / model / workspace）不在 `config.json` 的 `agents` 段配置，而是由 `~/.ftre/agents/default/agent.config.json` 持有。`agents` 段可选配置 `title_generation` / `compact_generation` / `context`，详见 [config.json 配置](/docs/config-file)。
+>
 > `api_protocol` 会被后端读取并传给 `_build_model_name(model_id, protocol)`，但当前 `_build_model_name()` 直接返回 `model_id`，不会据此拼接前缀；`load_config()` 构造出的 `LLMConfig.api_type` 仍使用默认 `"completions"`，实际走 OpenAI Chat Completions 流式适配。
 
 ## 校对记录

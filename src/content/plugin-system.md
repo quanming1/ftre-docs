@@ -111,7 +111,7 @@ self.api.register_router(router)
 
 ### 修改 messages 列表（通过 before_agent_run hook）
 
-> **`append_system_prompt()` 已移除。** 当前内置插件的 system prompt 注入通过 `BEFORE_AGENT_RUN` hook 操作 `ctx.messages`（`McpPlugin` / `SkillPlugin` 通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾）；`BEFORE_MESSAGES_BUILD` hook 可直接修改 `ctx.config.system_prompt`（`ContextGovernPlugin` 用于注入 AGENTS.md 和用户自定义提示词）。
+> **`append_system_prompt()` 已移除。** 当前内置插件的 system prompt 注入通过 `BEFORE_AGENT_RUN` hook 操作 `ctx.messages`（`McpPlugin` / `SkillPlugin` 通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾）；`BEFORE_MESSAGES_BUILD` hook 可直接修改 `ctx.config.system_prompt`（`ContextGovernPlugin` 用于注入 AGENTS.md）。用户自定义提示词（`USER.md`）不在插件中处理，而是由 `agent_manager.py` 在构建 system_prompt 时以 `<USER_PROFILE>` 标签注入。
 
 ```python
 from ftre.plugin import BEFORE_AGENT_RUN
@@ -384,15 +384,16 @@ class MyTool(Tool):
    - `FtrePluginApi` 暴露的方法与属性（`register_channel` / `register_hook` / `register_router` / `tool_registry` / `command_manager` / `event_loop`）与 `plugin/plugin.py` 一致；
    - `PluginManager.__init__` 接受 `command_manager` 参数（`plugin/plugin.py`），并在 `_load` 时将其透传给 `FtrePluginApi`；
    - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
-    - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:52-75` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:745-752`）；
+    - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:52-75` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:695-702`）；
    - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py` 一致；
    - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具；插件同名工具之间在 `ftre.tools.ToolRegistry.register()` 阶段会抛 `ValueError`；
  - **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:95-97`（`register_router`）。
   - **2025-07-18**：重构 system prompt 注入机制，新增 `before_agent_run` 挂点。
     - 删除 `append_system_prompt()` 方法与 `appended_system_prompts` 属性；
-     - 新增 `AgentRunContext` dataclass，字段：`session_id` / `channel_id`（只读）、`messages`（OpenAI 格式消息列表，可增删改）、`config`（可读），与 `plugin/hook_manager.py:60-80` 一致；
-    - `AgentLoop._run_async()` 在 `_create_agent()` 之后、`agent.run(messages)` 之前触发 `before_agent_run` hook（`agent/loop.py:525-535`）；
-     - `mcp` 和 `skill` 内置插件从 `append_system_prompt` 迁移到 `register_hook(BEFORE_AGENT_RUN, self._inject_system_prompt)`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾（`plugin/builtin/mcp_plugin.py:19,36,51-60`、`plugin/builtin/skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`）；
-     - 现有 `before_messages_build` hook 在 `AgentLoop._build_messages()` 中触发，代码在 `agent/loop.py:741-755`。
+     - 新增 `AgentRunContext` dataclass，字段：`session_id` / `channel_id`（只读）、`messages`（OpenAI 格式消息列表，可增删改）、`config`（可读），与 `plugin/hook_manager.py:78-98` 一致；
+    - `AgentLoop._run_async()` 在 `_create_agent()` 之后、`agent.run(messages)` 之前触发 `before_agent_run` hook（`agent/loop.py:546-556`）；
+      - `mcp` 和 `skill` 内置插件从 `append_system_prompt` 迁移到 `register_hook(BEFORE_AGENT_RUN, self._inject_system_prompt)`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾（`plugin/builtin/mcp_plugin.py:19,36,51-60`、`plugin/builtin/skill_plugin.py:16,49,51-66`、`hook_manager.py:33-48`）；
+     - 现有 `before_messages_build` hook 在 `AgentLoop._build_messages()` 中触发，代码在 `agent/loop.py:691-705`。
 - **2025-12-18**：修正 `before_agent_build` hook 文档错误。经核实，代码中不存在 `BEFORE_AGENT_BUILD` / `AgentBuildContext`，`hook_manager.py` 只定义 `BEFORE_MESSAGES_BUILD`（`hook_manager.py:29`）和 `BEFORE_AGENT_RUN`（`hook_manager.py:30`）。`mcp` 和 `skill` 插件实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system()` 将提示词追加到第一条 system 消息末尾（非 `ctx.system_prompt`）。删除文档中虚构的 `before_agent_build` hook 章节，修正所有相关引用。
 - **2026-07-18**：修正 `MessagesBuildContext` 行号引用。原记录标注 `plugin/hook_manager.py:33-57`，但该范围内 33-48 为 `append_to_first_system` 函数，`MessagesBuildContext` 类定义实际起始行为 `hook_manager.py:52`。修正为 `plugin/hook_manager.py:52-75`。字段内容本身与源码一致，仅行号因代码重构偏移。
+- **2026-07-03**：复验校对记录中 `loop.py` 行号。代码持续演进后偏移，以下为当前正确行号：`MessagesBuildContext` 构造在 `loop.py:718-726`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:568-577`（原记录标注 `546-556`）；`before_messages_build` hook 触发在 `loop.py:717-727`（原记录标注 `691-705`）。正文描述的所有行为仍准确。

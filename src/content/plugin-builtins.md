@@ -2,7 +2,7 @@
 
 ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`。Gateway 启动时 `PluginManager.load_all()` 先加载内置插件，再扫描 `~/.ftre/plugins/` 外部目录。
 
-> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中注册为普通指令。自动上下文管理采用 `precompact_threshold`(0.5) 单阈值：idle/usage 后台路径直接 `compact(enabled=true)`，用户输入路径在 `_step_compact` 中标记 `need_compact` 后在 `_run_async()` 中执行压缩；自动压缩的静默行为取 `agents.defaults.context.silent`，默认 `true`。
+> **注意**：上下文压缩功能（原 `context_compact.py` 插件）已迁移为核心组件 `CompactManager`（`ftre/agent/compact_manager.py`），不再作为插件存在。`/compact` 指令现已在 `AgentLoop._register_commands()` 中注册为普通指令。自动上下文管理采用 `precompact_threshold`(0.5) 单阈值：idle/usage 后台路径直接 `compact(enabled=true)`，用户输入路径在 `_step_compact` 中标记 `need_compact` 后在 `_run_async()` 中执行压缩；自动压缩的静默行为取 `agents.context.silent`，默认 `true`。
 
 ---
 
@@ -16,13 +16,15 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 **触发条件：** events 为空（首次对话）+ session 无 title。
 
-**实现说明：** 插件在 `before_messages_build` 时判断首条消息，随后在独立 worker 线程中异步调用 LLM 生成标题。优先使用 `agents.defaults.title_generation` 配置的专用模型，未配置则回退到主 LLM。生成结果经清洗后写入 session 的 `title` 字段，前端通过会话列表刷新展示新标题。
+**实现说明：** 插件在 `before_messages_build` 时判断首条消息，随后在独立 worker 线程中异步调用 LLM 生成标题。优先使用 `agents.title_generation` 配置的专用模型，未配置则回退到主 LLM。生成结果经清洗后写入 session 的 `title` 字段，前端通过会话列表刷新展示新标题。
 
 ---
 
 ## 2. context_govern — 上下文治理
 
-在 `before_messages_build` 阶段对事件流做四项修复 + AGENTS.md 注入 + 用户自定义提示词注入。
+在 `before_messages_build` 阶段对事件流做四项修复 + AGENTS.md 注入。
+
+> **注意**：用户自定义提示词（`USER.md`）的注入不在 `context_govern` 插件中完成，而是由 `agent_manager.py` 在构建 `AgentProfile` 时从 `~/.ftre/agents/<agent_id>/USER.md` 读取，并在 `_build_system_prompt()` 中以 `<USER_PROFILE>` 标签追加到 system_prompt 末尾。详见 [架构设计 — Agent Loop](/docs/architecture#agent-loop)。
 
 ### 修复能力
 
@@ -43,14 +45,14 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 </AGENTS_RULE>
 ```
 
-### 用户自定义提示词注入
+### 用户自定义提示词注入（agent_manager，非插件）
 
-如果 `config.json` 的 `agents.defaults.user_prompt` 不为空，将其内容以 `<USER_CUSTOM_PROMPT>` 标签注入 system_prompt 末尾：
+用户自定义提示词不在 `config.json` 中配置，而是从 `~/.ftre/agents/<agent_id>/USER.md` 文件读取，由 `agent_manager.py` 在构建 system_prompt 时以 `<USER_PROFILE>` 标签注入末尾：
 
 ```xml
-<USER_CUSTOM_PROMPT desc="以下是用户在客户端设置的自定义提示词，代表用户的个人偏好与额外要求，请遵守">
-...用户自定义提示词内容...
-</USER_CUSTOM_PROMPT>
+<USER_PROFILE desc="用户偏好与个人要求" path="C:\Users\用户名\.ftre\agents\default\USER.md">
+...USER.md 文件内容...
+</USER_PROFILE>
 ```
 
 ---
@@ -93,7 +95,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 ## 通用约定
 
-这些插件主要通过 `before_messages_build` hook（`context_govern`、`title_gen`）或 `BEFORE_AGENT_RUN` hook（`mcp`、`skill`）参与 Agent 生命周期；`mcp` 额外注册 HTTP 路由和 MCP 工具，`skill` 注册 `loadSkill` 工具和 HTTP 路由。上下文压缩功能已从插件迁移为核心组件 `CompactHandler`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `CompactHandler.maybe_schedule_idle_compact()` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
+这些插件主要通过 `before_messages_build` hook（`context_govern`、`title_gen`）或 `BEFORE_AGENT_RUN` hook（`mcp`、`skill`）参与 Agent 生命周期；`mcp` 额外注册 HTTP 路由和 MCP 工具，`skill` 注册 `loadSkill` 工具和 HTTP 路由。上下文压缩功能已从插件迁移为核心组件 `CompactManager`，自动压缩水位检测在 AgentLoop Pipeline 的 `_step_compact` 阶段执行（仅标记 `need_compact`），真正的启用或压缩执行在 `_run_async()` 中（关键路径直接 `await`）；空闲后台压缩由 `CompactManager.maybe_schedule_idle_compact()` 使用 `asyncio.create_task()` 异步派发。hook 内抛异常会被捕获跳过，不会拖垮主流程。内置插件按 `Path.glob("*.py")` 返回顺序加载；同一 hook 点上的执行顺序就是注册顺序。
 
 ## 校对记录
 
@@ -105,6 +107,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
   - `mcp` 插件在 `setup()` 中注册 `BEFORE_AGENT_RUN` hook，hook 函数 `_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾；`self.api.register_router(self._build_router())` 注册 `/mcp` 前缀路由（最终路径为 `/api/mcp`）；`loop.call_soon_threadsafe(asyncio.create_task, self._start_connections())` 异步启动 MCP 连接；
    - MCP `local` / `remote` 配置校验在 `_validate_mcp_server`（`mcp_plugin.py:199-241`）；`timeout` 默认 `30_000` ms（即 30 秒），与代码一致；
    - `skill` 插件默认目录 `~/.ftre/skills`，支持 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md` 三种形式（`skill_plugin.py:276-278,341-343`）；
-  - 上下文压缩功能已迁出插件：原 `context_compact.py` 插件不再存在；`CompactHandler` 在 `ftre/src/ftre/agent/compact_handler.py`；`/compact` 在 `AgentLoop._register_commands()` 注册为普通指令。
+  - 上下文压缩功能已迁出插件：原 `context_compact.py` 插件不再存在；`CompactManager` 在 `ftre/src/ftre/agent/compact_manager.py`；`/compact` 在 `AgentLoop._register_commands()` 注册为普通指令。
 - **2025-07-18**：修正 mcp 插件的 hook 描述。`mcp_plugin.py:36` 实际注册 `BEFORE_AGENT_RUN`，`_inject_system_prompt` 通过 `append_to_first_system(ctx.messages, ...)` 追加 MCP 工具说明到第一条 system 消息末尾。同步修正第 4 节「通用约定」中 "mcp 不注册 hook" 的错误表述。源码依据：`mcp_plugin.py:19,36,51-60`。
 - **2025-12-18**：修正 skill 插件 hook 描述。`skill_plugin.py:49` 实际注册 `BEFORE_AGENT_RUN`，skill 的 `_inject_system_prompt` 同时注入 `<skill_desc>` 和 `<skill_list>`（通过 `append_to_first_system(ctx.messages, ...)` 追加到第一条 system 消息末尾），非两个独立 hook。同步修正校对记录中 mcp 的 hook 描述。
+- **2026-07-18**：修正 `context_govern` 插件能力描述。原校对记录（2025-06-26）称 context_govern 负责「用户自定义提示词注入」并使用 `<USER_CUSTOM_PROMPT>` 标签，但当前 `context_govern.py` 只做四项 tool 事件修复 + AGENTS.md 注入，不处理用户自定义提示词。`USER.md` 的读取和 `<USER_PROFILE>` 标签注入由 `agent_manager.py:172,622-629` 完成，与 context_govern 无关。正文「用户自定义提示词注入」章节已同步修正。

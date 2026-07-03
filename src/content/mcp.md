@@ -81,7 +81,7 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
 - **标题栏 🔌 按钮**：弹出 `McpPopover`，可查看服务器状态、快速启/禁用，并跳转到设置页
 - **全局设置对话框的 MCP section**：`SettingsDialog` 已支持 `section: "mcp"`，并渲染 `McpSettings`
 
-> 注意：旧的 `SettingsPanel` 首页当前只内置了 `agents / models / gateway` 三个入口；MCP 不在这个首页列表里，但并不影响通过标题栏或 `ftre:open-settings` 事件直接进入 MCP 设置。`settings-events.ts` 里的 `SettingsSection` 联合类型也已包含 `"mcp"`。
+> 当前 `SettingsPanel` 首页内置了 5 个入口：`agents`（智能体）/ `models`（模型）/ `mcp`（MCP 服务器）/ `gateway`（网关）/ `performance`（性能监控）。此外，标题栏 🔌 按钮或 `ftre:open-settings` 事件也可直接进入 MCP 设置。`settings-events.ts` 里的 `SettingsSection` 联合类型包含 `"mcp"` / `"general"` / `"models"` / `"gateway"` / `"agents"` / `"performance"` / `"shortcuts"`。
 
 `McpSettings` 提供完整管理：
 
@@ -167,4 +167,5 @@ Agent 在系统提示词中会收到所有可用 MCP 工具的说明，无需手
    - MCP 工具命名格式 `mcp__{server}__{tool}` 与 `mcp_plugin.py:51-60` 中 `_inject_system_prompt` 通过 `BEFORE_AGENT_RUN` hook 调用 `append_to_first_system(ctx.messages, ...)` 注入内容一致；
    - MCP CRUD 路由（`GET/POST /api/mcp`、`PATCH/DELETE /api/mcp/{name}`）由 `mcp_plugin.py:72-159` 通过 `APIRouter(prefix="/mcp")` 注册；`WebSocketChannel` 在 `ws_channel.py:349,354` 统一为插件路由器添加 `/api` 前缀，最终路径为 `/api/mcp*`；
   - config watcher 与 3 秒兜底轮询在 `McpManager.start_config_watcher()` 中实现；
-  - 前端设置入口（标题栏 🔌 按钮 + `SettingsDialog` 的 `section: "mcp"`）与桌面端 UI 描述一致。
+   - 前端设置入口（标题栏 🔌 按钮 + `SettingsDialog` 的 `section: "mcp"`）与桌面端 UI 描述一致。
+- **2026-07-19**：修正前端设置入口描述。原称「旧的 `SettingsPanel` 首页当前只内置了 `agents / models / gateway` 三个入口；MCP 不在这个首页列表里」，但当前 `SettingsPanel` 首页已包含 5 个入口（`agents` / `models` / `mcp` / `gateway` / `performance`），MCP 已在首页列表中。`SettingsSection` 联合类型也已扩展为 7 项（`general` / `models` / `gateway` / `agents` / `mcp` / `performance` / `shortcuts`）。源码依据：`SettingsPanel.tsx:10,52-57`、`settings-events.ts:15-22`。

@@ -62,7 +62,11 @@ _PLUGIN_DIR = str(Path(__file__).resolve().parent / "octo-plugin")
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)    # 保证内部模块间导入可用
 
+_PLUGIN_FILE = Path(_PLUGIN_DIR) / "octo_channel.py"
 _SPEC = importlib.util.spec_from_file_location("ftre_octo_plugin_project", _PLUGIN_FILE)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"Cannot load Octo plugin from {_PLUGIN_FILE}")
+
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 
@@ -71,6 +75,8 @@ OctoBotApi = _MODULE.OctoBotApi
 OctoChannel = _MODULE.OctoChannel
 OctoChannelPlugin = _MODULE.OctoChannelPlugin
 create_octo_management_tool = _MODULE.create_octo_management_tool
+aiohttp = _MODULE.aiohttp
+subprocess = _MODULE.subprocess
 ```
 
 shim 通过 `importlib.util` 在加载实际模块前将 `octo-plugin/` 加入 `sys.path`，解决了 `from _api import ...` 等内部导入问题。
@@ -135,7 +141,7 @@ preparedPrompt = prependContext + "\n\n" + preparedPrompt
 
 ### XML 标签包裹
 
-参照 ftre 的 `<AGENTS_RULE>` / `<USER_CUSTOM_PROMPT>` 标签约定，所有插件的自动注入内容使用 XML 标签包裹：
+参照 ftre 的 `<AGENTS_RULE>` / `<USER_PROFILE>` 标签约定，所有插件的自动注入内容使用 XML 标签包裹：
 
 | 标签 | 注入位置 | 内容 |
 |------|---------|------|

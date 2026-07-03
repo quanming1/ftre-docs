@@ -37,7 +37,7 @@ class BusMessage:
 | type | 产生于 | 消费于 | data 内容 |
 |------|-------|-------|----------|
 | `"user_message"` | `Channel.receive()` / `CronScheduler._tick()` | `AgentLoop._consume()` → `_dispatch()` | 用户消息（content, session_id, attachments） |
-| `"agent_event"` | `AgentLoop._run_async()` / `CompactHandler._notify()` / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}`；其中既包括 Agent 运行事件（含 `done` 失败事件），也包括 `user_message` echo、`CompactHandler` 压缩事件与 `external_message` |
+| `"agent_event"` | `AgentLoop._run_async()` / `CompactManager._notify()` / `send_message._do_notify()` | `ChannelManager._dispatch_loop()` | `{type: "<event-type>", data: {...}}`；其中既包括 Agent 运行事件（含 `done` 失败事件），也包括 `user_message` echo、`CompactManager` 压缩事件与 `external_message` |
 | `"global_event"` | `AgentLoop` 等 | `ChannelManager._dispatch_loop()` | 全局广播事件 `{type: "<event-type>", data: {...}}`，`to_channel` / `to_session` 固定为 `"*"` |
 
 > 注意：`type="cancel"` 的 BusMessage 已不再使用。前端发送的 `type: "cancel"` 帧在 `ws_channel._on_message` 中被转换为 `content="/cancel"` 的 `user_message`，走 `/cancel` 系统级指令路径。
@@ -61,7 +61,7 @@ class BusMessage:
 }
 ```
 
-`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_message`、`CompactHandler` 产生的 `context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed`，或 `send_message(kind="notify")` 产生的 `external_message`（data 内层含 `content`、`from_channel`、`from_session` 字段）。
+`agent_event.data.type` 通常为 Agent 事件类型；此外还可能是 AgentLoop echo 的 `user_message`、`CompactManager` 产生的 `context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed`，或 `send_message(kind="notify")` 产生的 `external_message`（data 内层含 `content`、`from_channel`、`from_session` 字段）。
 
 ## 来源
 
@@ -75,7 +75,7 @@ BusMessage 的主要构造入口：
 | `AgentLoop._publish_session_status_async()` | 构造 `global_event(session_status)`，直接 `await bus.publish_outbound()` |
 | `AgentLoop._cmd_compact()` | `/compact` 指令内部构造 `global_event(session_status)`（compacting / idle），直接 `await self._publish_session_status_async()` |
 | `send_message._do_notify()` | 构造 `agent_event(external_message)` |
-| `CompactHandler._notify()` | 构造 `agent_event` 通知前端；当前 `_notify()` 为全异步方法，直接 `await self.bus.publish_outbound(msg)`，不需要 `run_coroutine_threadsafe` 桥接 |
+| `CompactManager._notify()` | 构造 `agent_event` 通知前端；当前 `_notify()` 为全异步方法，直接 `await self.bus.publish_outbound(msg)`，不需要 `run_coroutine_threadsafe` 桥接 |
 
 ## 消费
 
@@ -158,7 +158,7 @@ WebSocketChannel.send()
 |------|------|------|------|
 | `model` | string | 前端模型选择 UI | 当前选中的 LLM 模型（如 `"gpt-4o"`）。**注：前端发送，后端当前未使用（模型从配置文件加载）** |
 | `provider` | string | 前端模型选择 UI | 当前选中的 Provider 名称（如 `"openai"`）。**注：前端发送，后端当前未使用（Provider 从配置文件加载）** |
-| `agent_id` | string | 前端 | Agent ID，默认 `"code_agent"`。**注：前端发送，后端当前未使用** |
+| `agent_id` | string | 前端 | Agent ID，默认 `"default"`。后端 `AgentLoop._run_async()` 通过 `inbound.metadata.get("agent_id", "") or "default"` 读取该值，并调用 `agent_manager.load(agent_id)` 加载 per-agent 配置（LLM、workspace 等） |
 | `session_id` | string | 前端 | 当前 session ID。**注：前端发送，后端从 `data.session_id` 读取，`metadata.session_id` 当前未使用** |
 | `frame_id` | string | `ws_channel._on_message()` | 由 ws channel 从上行帧 `id` 字段自动注入到 metadata（非客户端主动设置） |
 
@@ -178,3 +178,4 @@ WebSocketChannel.send()
   - `MIRROR_TO_WS_CHANNELS = {"cron"}` 定义在 `channel/manager.py:13`，并由 `_dispatch_loop` 在 cron channel 分发后镜像到 ws；
    - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`），不再产生 `type="cancel"` 的 BusMessage；
   - `_PERSISTENT_CLASSES` 不包含 `assistant_message` / `reasoning`（流式增量）/ `retry` / `tool_cancel_requested` / `tool_cancelled`，这些类型不入库。
+- **2026-07-03**：修正 `metadata.agent_id` 描述。原称默认 `"code_agent"` 且"后端当前未使用"，实际默认为 `"default"`（`loop.py:425`：`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），且后端通过 `agent_manager.load(agent_id)` 加载 per-agent 配置（LLM、workspace 等），并非未使用。

@@ -97,7 +97,7 @@
   "metadata": {
     "model": "gpt-4o",
     "provider": "openai",
-    "agent_id": "code_agent",
+    "agent_id": "default",
     "session_id": "ws::sess_xxx"
   }
 }
@@ -115,10 +115,10 @@
 |------|------|------|
 | `model` | string | 前端模型选择 UI 当前选中的 LLM 模型名 |
 | `provider` | string | 前端模型选择 UI 当前选中的 Provider 名称 |
-| `agent_id` | string | Agent ID（默认 `"code_agent"`） |
+| `agent_id` | string | Agent ID（默认 `"default"`）。后端 `AgentLoop._run_async()` 通过 `metadata.agent_id` 加载 per-agent 配置（LLM、workspace 等）；未传入或为空时回退到 `"default"` |
 | `session_id` | string | 当前 session（与 data.session_id 相同） |
 
-> 注意：当前后端仅透传这些 metadata；模型选择实际来自 `~/.ftre/config.json`，`metadata.model` / `metadata.provider` / `metadata.agent_id` 不会改变本次 LLM 配置。
+> 注意：当前后端仅透传 `model` / `provider` metadata；模型选择实际来自 `~/.ftre/config.json`，`metadata.model` / `metadata.provider` 不会改变本次 LLM 配置。`metadata.agent_id` 会被后端读取并用于加载 per-agent 配置（LLM、workspace 等），未传入或为空时回退到 `"default"`。
 
 **行为流程**：
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
@@ -320,7 +320,7 @@
 
 #### tool_cancel_requested / tool_cancelled
 
-这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:373-382`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
+这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:394-403`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
 注意：`tool_timed_out` 不在 `_PERSISTENT_CLASSES` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
@@ -468,7 +468,7 @@
 
 #### context_compact_start / context_compact_done / context_compact_enabled / context_compact_failed
 
-上下文压缩实时事件。当前实际代码路径中，自动压缩与关键路径压缩都统一按 `precompact_threshold`（默认 50%）触发，并直接写入 `context_compact(enabled=true)`；自动压缩的 `silent` 取 `agents.defaults.context.silent`，默认 `true`。`enable_pending_compact()` 与 `context_compact_enabled` 仍然保留用于兼容历史上可能存在的 pending（`enabled=false`）事件，但当前代码没有新的 `enabled=false` 写入路径。手动 `/compact` 也会先尝试启用历史 pending，没有则直接生成 `enabled=true` 的压缩事件。
+上下文压缩实时事件。当前实际代码路径中，自动压缩与关键路径压缩都统一按 `precompact_threshold`（默认 50%）触发，并直接写入 `context_compact(enabled=true)`；自动压缩的 `silent` 取 `agents.context.silent`，默认 `true`。`enable_pending_compact()` 与 `context_compact_enabled` 仍然保留用于兼容历史上可能存在的 pending（`enabled=false`）事件，但当前代码没有新的 `enabled=false` 写入路径。手动 `/compact` 也会先尝试启用历史 pending，没有则直接生成 `enabled=true` 的压缩事件。
 
 **context_compact_start** data：
 
@@ -513,7 +513,7 @@
 - `context_compact_enabled`：不渲染气泡，只触发 token usage 刷新
 - `context_compact_failed`：找最后一条 `running` 的 compact 消息，更新为 `status = "failed"`，写入 `reason`
 
-**注意**：这些实时事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）通过 Bus 发送，当前不在后端 `AgentLoop._PERSISTENT_CLASSES` 白名单内，不经过 AgentLoop 持久化路径（`context_compact` 事件本身由 `CompactHandler.compact()` 直接调用 `save_message()` 写入 DB）。桌面端 `triggerCompaction()` 仍会调用 `POST /api/sessions/{id}/compact`（`packages/renderer/src/services/api.ts:451-467`），但后端当前源码里仍未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
+**注意**：这些实时事件由核心组件 `CompactManager`（`ftre/agent/compact_manager.py`）通过 Bus 发送，当前不在后端 `AgentLoop._PERSISTENT_CLASSES` 白名单内，不经过 AgentLoop 持久化路径（`context_compact` 事件本身由 `CompactManager.compact()` 直接调用 `save_message()` 写入 DB）。桌面端 `triggerCompaction()` 仍会调用 `POST /api/sessions/{id}/compact`（`packages/renderer/src/services/api.ts:451-467`），但后端当前源码里仍未实现该 HTTP 路由；可靠的手动压缩入口仍是发送 `/compact` 指令。
 
 #### context_compact — 历史回放专用
 
@@ -527,7 +527,7 @@
 }
 ```
 
-**仅出现在历史回放（HTTP API 历史消息流）中**，对应后端 `CompactHandler` 写入 DB 的持久化事件。前端 `applyEvent` 的 `case "context_compact"` 分支处理：插入一条已完成（`status = "done"`）的 compact 分隔气泡。与实时的三段式事件（`_start / _done / _failed`）不同，此事件是单步持久化形态。
+**仅出现在历史回放（HTTP API 历史消息流）中**，对应后端 `CompactManager` 写入 DB 的持久化事件。前端 `applyEvent` 的 `case "context_compact"` 分支处理：插入一条已完成（`status = "done"`）的 compact 分隔气泡。与实时的三段式事件（`_start / _done / _failed`）不同，此事件是单步持久化形态。
 
 | data.data 字段 | 类型 | 说明 |
 |----------------|------|------|
@@ -762,7 +762,7 @@
 
 ### context_compact — 上下文压缩
 
-`context_compact_start / done / enabled / failed` 事件由核心组件 `CompactHandler`（`ftre/agent/compact_handler.py`）触发。后端 `to_openai_messages` 遇到 `context_compact(enabled=true)` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点；`enabled=false` 的 pending 事件会被跳过（当前无代码写入 `enabled=false`，所有路径直接写入 `enabled=true`）。
+`context_compact_start / done / enabled / failed` 事件由核心组件 `CompactManager`（`ftre/agent/compact_manager.py`）触发。后端 `to_openai_messages` 遇到 `context_compact(enabled=true)` 事件时，**丢弃该点之前的所有消息**，用 `"[历史上下文摘要]\n{summary}"` 作为新的 user 消息起点；`enabled=false` 的 pending 事件会被跳过（当前无代码写入 `enabled=false`，所有路径直接写入 `enabled=true`）。
 
 ### HTTP API 路由
 
@@ -773,7 +773,7 @@
 | GET | `/api/config` | 读取 `~/.ftre/config.json` |
 | PUT | `/api/config` | 覆盖写 `~/.ftre/config.json` |
 | GET | `/api/health` | 健康检查 |
-| POST | `/api/sessions` | 创建 session（`channel_id` 必填 query param，`title`/`workspace` 可选 query param；若省略 `workspace`，后端当前会以空串落库，不会自动写入 `agents.defaults.workspace`） |
+| POST | `/api/sessions` | 创建 session（`channel_id` 必填 query param，`title`/`workspace` 可选 query param；若省略 `workspace`，后端当前会以空串落库，不会自动写入 `AgentConfig.workspace`） |
 | GET | `/api/sessions` | 列出 sessions（支持 limit/offset/channel_id/workspace 过滤；返回 `{sessions, total, limit, offset}`，其中每个 session 附带 `running` 字段；该字段仅表示该 session 是否存在于 `AgentLoop._active_agents` 中，即是否有普通 ReActAgent 正在执行，不包含 `/compact` 等不创建 `_active_agents` 的命令态） |
 | PUT | `/api/sessions/:id` | 更新 session（workspace/title） |
 | DELETE | `/api/sessions/:id` | 删除 session 及其所有消息 |
@@ -794,6 +794,7 @@
 | PATCH | `/api/cron/:job_id` | 局部更新 Cron 任务（仅允许修改 `cron` / `title` / `prompt` / `disabled`） |
 | DELETE | `/api/cron/:job_id` | 删除 Cron 任务（返回 204） |
 | GET | `/api/commands` | 返回已注册的斜杠指令列表（含 `system` 字段标识系统级指令） |
+| GET | `/api/agents` | 返回所有已注册的 agent 列表 |
 | GET | `/api/traces` | 列出最近的 Agent trace 摘要（支持 limit/offset 分页） |
 | GET | `/api/traces/{trace_id}` | 获取单个 trace 的轻量 Run 树 |
 | GET | `/api/traces/{trace_id}/runs/{run_id}` | 获取单个 Run 的完整输入/输出/事件 |
@@ -814,7 +815,8 @@
     - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:525`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:559`；
     - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`）；
    - 前端 `websocket-client.ts:223-229` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
-    - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-293`）；
+    - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-288`）；
    - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
  - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:456-470`。
 - **2026-07-01**：修正 Volatile Replay Buffer 描述。原文称 buffer「短暂保留刚入库的稳定事件」，但源码中 `VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}`（`channel/ws_channel.py:52-57`）只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_call` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE`（`channel/ws_channel.py:60-67`）触发清理而非进入 buffer。已删除「短暂保留稳定事件」的错误表述。
+- **2026-07-03**：修正 `metadata.agent_id` 描述。原 JSON 示例和 metadata 表格中默认值为 `"code_agent"`，实际前后端默认均为 `"default"`（`loop.py:425`）。原称 `metadata.agent_id` "不会改变本次 LLM 配置"，实际后端通过 `agent_manager.load(agent_id)` 加载 per-agent LLM/workspace 配置。同时在 HTTP API 路由表中补充缺失的 `GET /api/agents` 路由（`routes.py:503`）。

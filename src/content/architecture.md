@@ -122,9 +122,9 @@
 
 > 注意：`AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时当前未传入 `event_loop` 字段，因此 hook 的 `ctx.event_loop` 为 `None`。插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` 而非 `ctx.event_loop`。
 
-### CompactHandler（上下文压缩）
+### CompactManager（上下文压缩）
 
-上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_handler.py`），作为 `AgentLoop` 的一等公民挂载。**对外入口是全异步实现**，主要方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）都在主事件循环内 await，不需要 `run_coroutine_threadsafe` 桥接。（注：工具线程使用的 `WorkspaceAccessor` 仍会通过 `run_coroutine_threadsafe` 读写 session 的 `workspace`，但这与 CompactHandler 无关。）
+上下文压缩功能已从插件迁移为核心组件（`ftre/agent/compact_manager.py`），作为 `AgentLoop` 的一等公民挂载。**对外入口是全异步实现**，主要方法（`should_compact()`、`compact()`、`enable_pending_compact()`、`_notify()`）都在主事件循环内 await，不需要 `run_coroutine_threadsafe` 桥接。（注：工具线程使用的 `WorkspaceAccessor` 仍会通过 `run_coroutine_threadsafe` 读写 session 的 `workspace`，但这与 CompactManager 无关。）
 
 主要入口：
 - `should_compact()`：水位判断（async，只读 DB），默认会看 `compact_threshold`，但当前所有调用方都显式传入 `precompact_threshold`（默认 0.5）
@@ -168,12 +168,14 @@ def build_default_tools(..., llm_config=None):
   - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
   - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
   - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
-  - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:369-378` 一致；
+   - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:394-403` 一致；
    - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router`）与 `ftre/src/ftre/plugin/plugin.py` 一致；`append_system_prompt` 已移除，插件通过 `BEFORE_AGENT_RUN` / `BEFORE_MESSAGES_BUILD` hook 注入 system prompt；
-   - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:670-677` 一致；
-  - `CompactHandler.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_handler.py` 一致；
+   - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:695-702` 一致；
+  - `CompactManager.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_manager.py` 一致；
 - `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
 - **2025-07-15**：补全 `read` 工具目录列举功能描述，与 `read.py:187-189` 的 `_list_dir` 一致。
 - **2025-07-16**：修正 `_list_dir` 行号引用。函数定义在 `read.py:45-55`，调用点在 `read.py:187-189`。原记录仅标注了调用点行号。
-- **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-60`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-49`（`append_to_first_system` 工具函数）。
-- **2026-07-02**：代码重构后复验。`CompactHandler` 新增 `maybe_schedule_idle_compact()` 方法，承接原 `AgentLoop._schedule_idle_compact()` 的后台压缩调度职责；`_compact_tasks` / `_compact_retry_after` / `COMPACT_UNRETRYABLE_*` 常量从 `loop.py` 迁移到 `compact_handler.py`。正文描述的所有行为仍准确，已在主要入口列表中补充 `maybe_schedule_idle_compact()`。
+ - **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-60`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-48`（`append_to_first_system` 工具函数）。
+- **2026-07-02**：代码重构后复验。`CompactManager` 新增 `maybe_schedule_idle_compact()` 方法，承接原 `AgentLoop._schedule_idle_compact()` 的后台压缩调度职责；`_compact_tasks` / `_compact_retry_after` / `COMPACT_UNRETRYABLE_*` 常量从 `loop.py` 迁移到 `compact_manager.py`。正文描述的所有行为仍准确，已在主要入口列表中补充 `maybe_schedule_idle_compact()`。
+- **2026-07-03**：复验校对记录中的行号。代码持续演进后偏移，以下为当前正确行号：`_PERSISTENT_CLASSES` 在 `loop.py:396-405`（原记录标注 `394-403`）；`MessagesBuildContext` 构造在 `loop.py:718-726`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:568-577`（原记录标注 `546-556`）。正文描述的所有行为仍准确。
+- **2026-07-03（补充）**：源码文件/类名重命名校对。`compact_handler.py` → `compact_manager.py`，类 `CompactHandler` → `CompactManager`（`compact_manager.py:101`）。正文 §CompactManager 标题、§校对记录中所有 `CompactHandler` / `compact_handler.py` 引用已同步修正。逐项复验 `compact_manager.py`，所有关键行为与行号不变。
