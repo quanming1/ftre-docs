@@ -79,8 +79,8 @@ body {
 .prose-docs {
   max-width: none;
   color: var(--ftre-text-secondary);
-  font-size: 16px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.65;
 }
 
 .prose-docs > :first-child {
@@ -107,35 +107,35 @@ body {
 }
 
 .prose-docs h2 {
-  margin: 48px 0 20px;
-  padding-bottom: 12px;
+  margin: 36px 0 14px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--ftre-border-subtle);
-  font-size: 24px;
+  font-size: 22px;
 }
 
 .prose-docs h3 {
-  margin: 32px 0 16px;
-  font-size: 20px;
+  margin: 24px 0 12px;
+  font-size: 18px;
 }
 
 .prose-docs h4 {
-  margin: 24px 0 12px;
-  font-size: 17px;
+  margin: 20px 0 10px;
+  font-size: 16px;
 }
 
 .prose-docs p {
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   color: var(--ftre-text-muted);
 }
 
 .prose-docs ul,
 .prose-docs ol {
-  margin: 0 0 20px;
-  padding-left: 24px;
+  margin: 0 0 16px;
+  padding-left: 22px;
 }
 
 .prose-docs li {
-  margin: 6px 0;
+  margin: 4px 0;
   color: var(--ftre-text-muted);
 }
 
@@ -166,12 +166,12 @@ body {
 }
 
 .prose-docs pre {
-  margin: 24px 0;
+  margin: 20px 0;
   overflow-x: auto;
   border: 1px solid var(--ftre-border-subtle);
   border-radius: 8px;
   background: var(--ftre-bg-elevated);
-  padding: 20px 24px;
+  padding: 16px 20px;
 }
 
 .prose-docs pre code {
@@ -186,7 +186,7 @@ body {
 
 .prose-docs table {
   width: 100%;
-  margin: 24px 0;
+  margin: 20px 0;
   border-collapse: separate;
   border-spacing: 0;
   overflow: hidden;
@@ -198,10 +198,10 @@ body {
 .prose-docs th,
 .prose-docs td {
   border-bottom: 1px solid var(--ftre-border-subtle);
-  padding: 12px 16px;
+  padding: 9px 14px;
   text-align: left;
   vertical-align: top;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .prose-docs th {
@@ -219,15 +219,15 @@ body {
 }
 
 .prose-docs blockquote {
-  margin: 24px 0;
+  margin: 20px 0;
   border-left: 3px solid var(--ftre-border-default);
   background: var(--ftre-bg-elevated);
   color: var(--ftre-text-muted);
-  padding: 14px 18px;
+  padding: 12px 16px;
 }
 
 .prose-docs hr {
-  margin: 40px 0;
+  margin: 32px 0;
   border: 0;
   border-top: 1px solid var(--ftre-border-subtle);
 }

@@ -109,7 +109,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
     <div className="grid gap-12 xl:grid-cols-[minmax(0,1fr)_220px]">
       <article className="min-w-0 max-w-[720px] w-full">
         <div className="mb-10">
-          <h1 className="text-[40px] font-semibold leading-[1.1] tracking-[-0.02em] text-black">
+          <h1 className="text-[34px] font-semibold leading-[1.15] tracking-[-0.02em] text-black">
             {doc.title}
           </h1>
         </div>
@@ -126,7 +126,7 @@ export default function DocPage({ doc }: { doc: DocEntry }) {
           </ReactMarkdown>
         </div>
 
-        <footer className="mt-16 grid gap-4 border-t border-black/[0.08] pt-8 sm:grid-cols-2">
+        <footer className="mt-12 grid gap-4 border-t border-black/[0.08] pt-6 sm:grid-cols-2">
           {prev ? <DocLink doc={prev} direction="prev" /> : <div />}
           {next && <DocLink doc={next} direction="next" />}
         </footer>
@@ -143,16 +143,18 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
   return (
     <aside className="doc-toc hidden xl:block">
       <div className="sticky top-6 max-h-[calc(100vh-160px)] overflow-y-auto">
-        <nav className="space-y-2">
+        <nav className="border-l border-black/[0.08]">
           {items.map((item) => (
             <button
               key={item.id}
               onClick={() => onItemClick(item.id)}
-              className={`block w-full truncate py-1 text-left text-[13px] leading-5 transition-colors hover:text-black ${
+              className={`block w-full truncate py-[3px] pr-2 text-left text-[12.5px] leading-[18px] transition-colors hover:text-black ${
+                item.level === 3 ? 'pl-5' : 'pl-3'
+              } ${
                 activeId === item.id
-                  ? 'text-black font-medium'
-                  : 'text-black/40'
-              } ${item.level === 3 ? 'pl-3' : ''}`}
+                  ? 'text-black font-medium border-l-2 -ml-px border-black'
+                  : 'text-black/55'
+              }`}
             >
               {item.text}
             </button>
