@@ -196,7 +196,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 
 ### tool_cancel_requested / tool_cancelled
 
-这两个事件类型当前**不在任何代码路径中**——既不在 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 的 `EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:396-405`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
+这两个事件类型当前**不在任何代码路径中**——既不在 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 的 `EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:414-423`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
 
 - 取消最终通过 `done(success=false, reason="cancelled")` 表达；如果工具任务被取消/中断，可能额外产出 `tool_result(status="cancelled")`，但不应依赖每次取消都有 cancelled 状态的 `tool_result`。
 - 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。
@@ -528,3 +528,4 @@ _user_message 到达 AgentLoop_
   - `usage_update` 在流循环内产出（`react_runner.py:495`），`assistant_message_complete` 在流循环后产出，因此 `usage_update` 始终早于 `assistant_message_complete`；
   - `react_runner` 两阶段写入（先所有 `tool_result`，再统一追加 `UserMessageEvent`）与 `react_runner.py:658-689` 一致；
   - `format_assistant_message` 始终输出 `reasoning_content` 字段（`reasoning.py:34`），与 OpenAI messages 重构一致。
+- **2026-07-19**：行号复验。`AgentLoop._PERSISTENT_CLASSES` 当前位于 `loop.py:414-423`（原记录标注 `396-405`）。`EventType` 枚举与 dataclass 子类（12 个含 `UserMessageEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent`）当前位于 `event.py:16-28`、`event.py:100-293`，与正文描述一致。`tool_call_streaming_event([{"id": event.id, "name": event.name, "arguments_delta": event.text}])` 构造当前在 `react_runner.py:471-477`；`usage_update_event(event.usage)` 在 `react_runner.py:495`；`UserMessageEvent` 两阶段追加（先所有 `tool_result`，再统一追加 `UserMessageEvent`）在 `react_runner.py:658-689`。正文所有关键事实与源码一致，无需修订。

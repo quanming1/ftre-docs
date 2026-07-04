@@ -37,7 +37,7 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 ### AGENTS.md 注入
 
-如果当前工作区下存在 `AGENTS.md`，将其内容以 `<AGENTS_RULE>` 标签注入 system_prompt 末尾：
+优先从 Agent 目录（`agent_dir/AGENTS.md`）读取；若不存在则回退到工作区目录（`workspace/AGENTS.md`）。只注入一个文件。将内容以 `<AGENTS_RULE>` 标签注入 system_prompt 末尾：
 
 ```xml
 <AGENTS_RULE desc="以下是用户在工作区自定义的规则与指令，你必须严格遵守" path="E:\project\AGENTS.md">

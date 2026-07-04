@@ -179,3 +179,4 @@ WebSocketChannel.send()
    - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`），不再产生 `type="cancel"` 的 BusMessage；
   - `_PERSISTENT_CLASSES` 不包含 `assistant_message` / `reasoning`（流式增量）/ `retry` / `tool_cancel_requested` / `tool_cancelled`，这些类型不入库。
 - **2026-07-03**：修正 `metadata.agent_id` 描述。原称默认 `"code_agent"` 且"后端当前未使用"，实际默认为 `"default"`（`loop.py:425`：`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），且后端通过 `agent_manager.load(agent_id)` 加载 per-agent 配置（LLM、workspace 等），并非未使用。
+- **2026-07-19**：行号复验。`agent_id` 默认值解析代码当前位于 `loop.py:443`（`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），与本条 2026-07-03 记录中 `loop.py:425` 相比因代码演进漂移 18 行；正文事实本身不变。

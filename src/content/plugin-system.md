@@ -327,7 +327,7 @@ Hook 上下文中的 `config` 是 `AgentConfig` 的副本（`before_messages_bui
 | `context_window` | `int \| None` | 上下文窗口大小（token 数） |
 | `max_output` | `int \| None` | 最大输出 token 数 |
 | `vision` | `bool` | 是否支持视觉输入 |
-| `model` | `str` | 派生的 LiteLLM 模型名（含 provider 前缀），供 ReActAgent 直接使用 |
+| `model` | `str` | 派生字段，当前由 `_build_model_name()` 直接返回 `model_id`（不做前缀拼接），供 ReActAgent 直接使用 |
 
 ### ContextConfig 字段
 
@@ -466,3 +466,4 @@ class MyTool(Tool):
 - **2026-07-18**：修正 `MessagesBuildContext` 行号引用。原记录标注 `plugin/hook_manager.py:33-57`，但该范围内 33-48 为 `append_to_first_system` 函数，`MessagesBuildContext` 类定义实际起始行为 `hook_manager.py:52`。修正为 `plugin/hook_manager.py:52-75`。字段内容本身与源码一致，仅行号因代码重构偏移。
 - **2026-07-03**：复验校对记录中 `loop.py` 行号。代码持续演进后偏移，以下为当前正确行号：`MessagesBuildContext` 构造在 `loop.py:714-722`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:564-574`（原记录标注 `546-556`）；`before_messages_build` hook 触发在 `loop.py:710-725`（原记录标注 `691-705`）。正文描述的所有行为仍准确。
 - **2026-07-04**：新增「AgentConfig 字段说明」章节。用户反馈 hook 上下文中引用的 `AgentConfig` 从未列出完整字段。与 `config.py:62-128` 核对，补充 `AgentConfig`（7 字段）、`LLMConfig`（9 字段）、`ContextConfig`（6 字段）的完整表格，并在两处 hook 上下文表格中添加交叉引用。同日新增 `AgentRunContext.agent_profile` 字段（`hook_manager.py:100`）及「AgentProfile 字段说明」章节（12 字段，与 `agent_manager.py:33-47` 核对），插件可在 `before_agent_run` hook 中读取当前 agent 的 `agent_id` / `name` / `tools_config` / `mcp_config` / `soul_prompt` 等完整配置。
+- **2026-07-19**：行号复验。代码持续演进后偏移，以下为当前正确行号：`MessagesBuildContext` 构造在 `loop.py:745-756`（原记录标注 `714-722`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:587-599`（原记录标注 `564-574`）；`before_messages_build` hook 触发在 `loop.py:739-756`（原记录标注 `710-725`）。`hook_manager.py` 常量定义仍准确（`BEFORE_MESSAGES_BUILD = "before_messages_build"`：`hook_manager.py:31`、`BEFORE_AGENT_RUN = "before_agent_run"`：`hook_manager.py:32`；`append_to_first_system` 函数定义在 `hook_manager.py:35`；`MessagesBuildContext` 类定义在 `hook_manager.py:53-78`；`AgentRunContext` 类定义在 `hook_manager.py:81-103`，其中 `agent_tool_registry` 字段在 `:103`）。正文描述的所有行为仍准确。

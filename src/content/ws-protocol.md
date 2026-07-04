@@ -320,7 +320,7 @@
 
 #### tool_cancel_requested / tool_cancelled
 
-这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:396-405`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
+这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:414-423`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
 注意：`tool_timed_out` 不在 `_PERSISTENT_CLASSES` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
@@ -825,3 +825,4 @@
  - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:465-475`。
 - **2026-07-01**：修正 Volatile Replay Buffer 描述。原文称 buffer「短暂保留刚入库的稳定事件」，但源码中 `VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}`（`channel/ws_channel.py:52-57`）只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_call` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE`（`channel/ws_channel.py:60-67`）触发清理而非进入 buffer。已删除「短暂保留稳定事件」的错误表述。
 - **2026-07-03**：修正 `metadata.agent_id` 描述。原 JSON 示例和 metadata 表格中默认值为 `"code_agent"`，实际前后端默认均为 `"default"`（`loop.py:425`）。原称 `metadata.agent_id` "不会改变本次 LLM 配置"，实际后端通过 `agent_manager.load(agent_id)` 加载 per-agent LLM/workspace 配置。同时在 HTTP API 路由表中补充缺失的 `GET /api/agents` 路由（`routes.py:503`）。
+- **2026-07-19**：行号复验。`agent_id` 默认值解析代码当前位于 `loop.py:443`（`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），与本条 2026-07-03 记录中 `loop.py:425` 相比漂移 18 行。`AgentLoop._PERSISTENT_CLASSES` 当前位于 `loop.py:414-423`（原记录标注 `396-405`）。`VOLATILE_EVENT_TYPES` 与 `VOLATILE_CLEAR_BY_TYPE` 当前在 `ws_channel.py:52-67`，与原文描述一致。`ws_channel._attach()` 方法当前在 `ws_channel.py:458-462`（原 2025-06-26 校对记录标注 `525` / `559`，已漂移，但 fire-and-forget 行为本身不变）。`/api/agents` 路由当前在 `routes.py:503-509`（`list_agents`），`/api/agents/{agent_id}` 路由在 `routes.py:511+`，`/api/agents/{agent_id}/prompts` 在 `routes.py:537-543`。正文所有关键事实与源码一致，无需修订。
