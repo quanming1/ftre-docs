@@ -40,46 +40,30 @@ Octo IM Server (WuKongIM 二进制协议)
 
 ## 文件结构
 
-插件项目位于 `~/.ftre/plugins/octo-plugin/`，顶层 `~/.ftre/plugins/octo_channel.py` 是 shim 入口。
+插件项目位于 `~/.ftre/plugins/octo_plugin/`，入口为 `__init__.py`。
 
 | 文件 | 职责 |
 |------|------|
-| `octo_channel.py` | 公开门面，re-export 所有公开符号 |
+| `__init__.py` | 插件入口，re-export `OctoChannelPlugin` |
 | `_api.py` | 通道类型常量 + `external_key` / fallback `session_id` 工具函数 + `extract_parent_group_no()` + `OctoBotApi` HTTP 客户端 |
 | `_mention.py` | @ 检测门控（含广播抑制）+ 群成员缓存（5 分钟 TTL）与格式化 |
-| `_channel.py` | `OctoChannel` 类：WS 连接管理、消息收发、历史消息 API 拉取与分段注入、`pending_context` 管理 |
+| `_channel.py` | `OctoChannel` 类：WS 连接管理、消息收发、历史消息 API 拉取与分段注入 |
 | `_tools.py` | `octo_management` Agent 工具（4 个操作：list-groups / group-info / group-members / search-members） |
-| `_plugin.py` | `OctoChannelPlugin` 入口：注册 Channel、`BEFORE_AGENT_RUN` hook、安全策略（当前临时 hardcode） |
+| `_plugin.py` | `OctoChannelPlugin`：注册 Channel、`BEFORE_AGENT_RUN` hook、私有工具注册 |
 | `octo-bridge.js` | Node.js WuKongIM 协议桥接：二进制解密 → 本地 JSON WS |
 
-### Shim 加载机制
+### 加载机制
 
-ftre 的 PluginManager 扫描 `~/.ftre/plugins/*.py`，只直接加载该目录下的 `.py` 文件。因此需要顶层的 `octo_channel.py` 作为 shim：
+ftre 的 PluginManager 扫描 `~/.ftre/plugins/` 下的子目录，每个子目录是一个 Python package。入口固定为 `__init__.py`：
 
 ```python
-# ~/.ftre/plugins/octo_channel.py
-_PLUGIN_DIR = str(Path(__file__).resolve().parent / "octo-plugin")
-if _PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, _PLUGIN_DIR)    # 保证内部模块间导入可用
+# ~/.ftre/plugins/octo_plugin/__init__.py
+from _plugin import OctoChannelPlugin  # noqa: E402, F401
 
-_PLUGIN_FILE = Path(_PLUGIN_DIR) / "octo_channel.py"
-_SPEC = importlib.util.spec_from_file_location("ftre_octo_plugin_project", _PLUGIN_FILE)
-if _SPEC is None or _SPEC.loader is None:
-    raise ImportError(f"Cannot load Octo plugin from {_PLUGIN_FILE}")
-
-_MODULE = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_MODULE)
-
-# 公开 re-export
-OctoBotApi = _MODULE.OctoBotApi
-OctoChannel = _MODULE.OctoChannel
-OctoChannelPlugin = _MODULE.OctoChannelPlugin
-create_octo_management_tool = _MODULE.create_octo_management_tool
-aiohttp = _MODULE.aiohttp
-subprocess = _MODULE.subprocess
+__all__ = ["OctoChannelPlugin"]
 ```
 
-shim 通过 `importlib.util` 在加载实际模块前将 `octo-plugin/` 加入 `sys.path`，解决了 `from _api import ...` 等内部导入问题。
+PluginManager 将子目录加入 `sys.path`，然后 `importlib.import_module(目录名)` 执行 `__init__.py`，从中找到 `Plugin` 子类自动实例化并加载。
 
 ---
 
