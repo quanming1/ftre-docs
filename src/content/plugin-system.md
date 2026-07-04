@@ -25,12 +25,12 @@ ftre 的插件系统允许你在不修改核心代码的前提下，扩展 Agent
 ~/.ftre/
 ├── config.json          ← 在这里配置插件
 └── plugins/
-    └── my-plugin/       ← 每个子目录是一个插件 package
-        ├── plugin.py    ← 任意 .py 文件（非 _ 前缀），暴露 Plugin 子类即可
+    └── my_plugin/       ← 每个子目录是一个插件 package
+        ├── __init__.py  ← 入口文件（必需），暴露 Plugin 子类
         └── helper.py    ← 插件内部模块
 ```
 
-插件以**子目录**形式存放。Gateway 启动时扫描 `~/.ftre/plugins/` 下的每个子目录，将目录加入 `sys.path`，然后扫描其中所有非 `_` 前缀的 `.py` 文件，找到 `Plugin` 子类自动实例化并加载。
+插件以**子目录**形式存放，目录名即 Python package 名（使用下划线，如 `octo_plugin`）。Gateway 启动时扫描 `~/.ftre/plugins/` 下的每个子目录，将目录加入 `sys.path`，然后 import 该 package（执行 `__init__.py`），从中找到 `Plugin` 子类自动实例化并加载。
 
 ---
 
