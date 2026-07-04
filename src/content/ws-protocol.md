@@ -320,7 +320,7 @@
 
 #### tool_cancel_requested / tool_cancelled
 
-这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:394-403`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
+这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:396-405`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
 注意：`tool_timed_out` 不在 `_PERSISTENT_CLASSES` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
@@ -795,6 +795,11 @@
 | DELETE | `/api/cron/:job_id` | 删除 Cron 任务（返回 204） |
 | GET | `/api/commands` | 返回已注册的斜杠指令列表（含 `system` 字段标识系统级指令） |
 | GET | `/api/agents` | 返回所有已注册的 agent 列表 |
+| POST | `/api/agents` | 创建新 agent（请求体含 `id` / `name` / `provider` / `model` / `workspace`） |
+| PATCH | `/api/agents/{agent_id}` | 更新 `agent.config.json` 字段（目前支持 `llm` / `name` / `workspace`） |
+| DELETE | `/api/agents/{agent_id}` | 删除 agent |
+| GET | `/api/agents/{agent_id}/prompts` | 读取 agent 的 prompt 文件（SOUL.md / AGENTS.md / USER.md） |
+| PUT | `/api/agents/{agent_id}/prompts/{filename}` | 写入 agent 的指定 prompt 文件（请求体含 `content`） |
 | GET | `/api/traces` | 列出最近的 Agent trace 摘要（支持 limit/offset 分页） |
 | GET | `/api/traces/{trace_id}` | 获取单个 trace 的轻量 Run 树 |
 | GET | `/api/traces/{trace_id}/runs/{run_id}` | 获取单个 Run 的完整输入/输出/事件 |
@@ -817,6 +822,6 @@
    - 前端 `websocket-client.ts:223-229` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
     - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-288`）；
    - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
- - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:456-470`。
+ - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:465-475`。
 - **2026-07-01**：修正 Volatile Replay Buffer 描述。原文称 buffer「短暂保留刚入库的稳定事件」，但源码中 `VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}`（`channel/ws_channel.py:52-57`）只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_call` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE`（`channel/ws_channel.py:60-67`）触发清理而非进入 buffer。已删除「短暂保留稳定事件」的错误表述。
 - **2026-07-03**：修正 `metadata.agent_id` 描述。原 JSON 示例和 metadata 表格中默认值为 `"code_agent"`，实际前后端默认均为 `"default"`（`loop.py:425`）。原称 `metadata.agent_id` "不会改变本次 LLM 配置"，实际后端通过 `agent_manager.load(agent_id)` 加载 per-agent LLM/workspace 配置。同时在 HTTP API 路由表中补充缺失的 `GET /api/agents` 路由（`routes.py:503`）。

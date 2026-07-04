@@ -66,7 +66,7 @@ pnpm dev
 
 - **2025-06-26**：与 `ftre/start.py` / `E:\ftre\pyproject.toml` / `E:\ftre-agent-core\pyproject.toml` 核对，描述准确。
   - `py -m pip install -e .` 安装 `E:\ftre-agent-core` 与 `E:\ftre` 两个仓库的步骤与各自 `pyproject.toml` 一致；`ftre` 入口通过 `[project.scripts] ftre = "ftre.main:main"` 注册；
-  - `ftre gateway` 与 `ftre/src/ftre/main.py:198-203` 一致；
+  - `ftre gateway` 与 `ftre/src/ftre/main.py:201-208` 一致；
   - WebSocket 监听 `127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致（缺省值 `48650`）；
   - HTTP API 监听 `http://127.0.0.1:48650/api/`（`/api` 前缀在 `ws_channel.py:349,354` 注入）；
   - `requires-python = ">=3.11"` 与两个 `pyproject.toml` 一致；当前工作区通常使用 Python 3.12；

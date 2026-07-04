@@ -351,7 +351,7 @@ ftre 的差异：
   - `should_compact()` 默认阈值为 `config.context.compact_threshold`（`compact_manager.py:130`）✅；
   - `_run_async` 关键路径 `enable_pending_compact → compact(enabled=True, silent=silent)`（`loop.py:461-479`）✅；
   - `_cmd_compact` 流程 `enable_pending_compact(silent=False) → compact(enabled=True, silent=False)` + `session_status` 广播（`loop.py:164-195`）✅；
-  - `usage_update` 实时路径（`loop.py:611-614`）与 `done` 后 idle 路径（`loop.py:669-672`）均调用 `maybe_schedule_idle_compact` 且排除 subagent channel ✅；
+   - `usage_update` 实时路径（`loop.py:607-612`）与 `done` 后 idle 路径（`loop.py:665-670`）均调用 `maybe_schedule_idle_compact` 且排除 subagent channel ✅；
   - 冷却机制 `COMPACT_UNRETRYABLE_LLM_CODES` / `COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`（`compact_manager.py:48-49`）仅作用于后台路径 ✅；
   - `compact()` 写入字段（`compact_manager.py:300-317`）✅；
   - `enable_pending_compact()` 的 `tokens_after` 包含 tail（`compact_manager.py:187`）✅；
