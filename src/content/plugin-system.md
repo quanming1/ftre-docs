@@ -266,6 +266,7 @@ def my_hook(ctx):
 | `channel_id` | str | 来源 channel（只读） |
 | `messages` | list[dict] | OpenAI 格式消息列表（可增删改） |
 | `config` | AgentConfig | 配置深拷贝（可读，[完整字段见下文](#agentconfig-字段说明)） |
+| `agent_profile` | `AgentProfile \| None` | 当前 agent 的完整运行时配置（只读）。含 `agent_id` / `name` / `tools_config` / `mcp_config` / `soul_prompt` / `agents_md` / `user_prompt_md` / `agent_dir` 等字段；`None` 表示未加载到 agent 配置（仅 default 无目录时） |
 
 **使用示例：**
 
@@ -340,6 +341,27 @@ Hook 上下文中的 `config` 是 `AgentConfig` 的副本（`before_messages_bui
 | `safety_buffer` | `int` | `1024` | 预算安全垫：`budget = context_window - max_output - safety_buffer` |
 | `idle_compaction` | `bool` | `True` | 是否开启后台空闲压缩（每轮 done 后异步 LLM 摘要） |
 | `silent` | `bool` | `True` | 压缩事件是否标记 silent（前端不渲染气泡，对用户无感） |
+
+---
+
+## AgentProfile 字段说明
+
+`before_agent_run` hook 上下文中的 `agent_profile` 是当前 agent 的完整运行时配置（只读）。对应 `~/.ftre/agents/<id>/agent.config.json` 合并后的结果：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `agent_id` | `str` | Agent 标识符（如 `"default"` / `"octo"` / `"exodia"`） |
+| `name` | `str` | Agent 显示名称 |
+| `llm` | `LLMConfig` | Agent 专属 LLM 配置（已合并进 `AgentConfig.llm`） |
+| `workspace` | `str` | Agent 的"家目录"（存放 prompt 文件的路径，不是对话 cwd） |
+| `tools_config` | `dict \| None` | 工具白/黑名单：`{"allow": [...], "deny": [...]}` 或 `None`（不过滤） |
+| `mcp_config` | `dict` | MCP 服务器配置 |
+| `plugins_config` | `list` | 插件配置列表 |
+| `disabled_skills` | `list` | 禁用的 Skill 名称列表 |
+| `soul_prompt` | `str` | `SOUL.md` 内容（Agent 人格定义） |
+| `user_prompt_md` | `str` | `USER.md` 内容（用户偏好提示词） |
+| `agents_md` | `str` | `AGENTS.md` 内容（行为规范） |
+| `agent_dir` | `str` | Agent 目录的绝对路径（如 `~/.ftre/agents/default`） |
 
 ---
 
@@ -443,4 +465,4 @@ class MyTool(Tool):
 - **2025-12-18**：修正 `before_agent_build` hook 文档错误。经核实，代码中不存在 `BEFORE_AGENT_BUILD` / `AgentBuildContext`，`hook_manager.py` 只定义 `BEFORE_MESSAGES_BUILD`（`hook_manager.py:29`）和 `BEFORE_AGENT_RUN`（`hook_manager.py:30`）。`mcp` 和 `skill` 插件实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system()` 将提示词追加到第一条 system 消息末尾（非 `ctx.system_prompt`）。删除文档中虚构的 `before_agent_build` hook 章节，修正所有相关引用。
 - **2026-07-18**：修正 `MessagesBuildContext` 行号引用。原记录标注 `plugin/hook_manager.py:33-57`，但该范围内 33-48 为 `append_to_first_system` 函数，`MessagesBuildContext` 类定义实际起始行为 `hook_manager.py:52`。修正为 `plugin/hook_manager.py:52-75`。字段内容本身与源码一致，仅行号因代码重构偏移。
 - **2026-07-03**：复验校对记录中 `loop.py` 行号。代码持续演进后偏移，以下为当前正确行号：`MessagesBuildContext` 构造在 `loop.py:714-722`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:564-574`（原记录标注 `546-556`）；`before_messages_build` hook 触发在 `loop.py:710-725`（原记录标注 `691-705`）。正文描述的所有行为仍准确。
-- **2026-07-04**：新增「AgentConfig 字段说明」章节。用户反馈 hook 上下文中引用的 `AgentConfig` 从未列出完整字段。与 `config.py:62-128` 核对，补充 `AgentConfig`（7 字段）、`LLMConfig`（9 字段）、`ContextConfig`（6 字段）的完整表格，并在两处 hook 上下文表格中添加交叉引用。
+- **2026-07-04**：新增「AgentConfig 字段说明」章节。用户反馈 hook 上下文中引用的 `AgentConfig` 从未列出完整字段。与 `config.py:62-128` 核对，补充 `AgentConfig`（7 字段）、`LLMConfig`（9 字段）、`ContextConfig`（6 字段）的完整表格，并在两处 hook 上下文表格中添加交叉引用。同日新增 `AgentRunContext.agent_profile` 字段（`hook_manager.py:100`）及「AgentProfile 字段说明」章节（12 字段，与 `agent_manager.py:33-47` 核对），插件可在 `before_agent_run` hook 中读取当前 agent 的 `agent_id` / `name` / `tools_config` / `mcp_config` / `soul_prompt` 等完整配置。
