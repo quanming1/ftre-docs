@@ -120,9 +120,9 @@ shim 通过 `importlib.util` 在加载实际模块前将 `octo-plugin/` 加入 `
 
 插件使用 ftre 的 `SessionManager.get_or_create_external_session()` 将 Octo 会话绑定到 ftre 内部 session，实现不同群聊/私聊的对话上下文持久隔离。
 
-- **external_key** 格式：`octo:{channel_type}:{channel_id}`（私聊时 `channel_id` 为空则用 `from_uid`）
+- **external_key** 格式：`octo:{channel_type}:{channel_id}:{bot_id}`（私聊时 `channel_id` 为空则用 `from_uid`；`bot_id` 区分同一群内不同 bot 的 session）
 - **主路径**：通过 `external_sessions` 表映射到 ftre session（如 `octo::sess_xxx`），每次同群 @bot 复用同一 session
-- **回退路径**：仅在 `session_manager` 不可用时，使用 `build_session_id()` 构造 `octo_{channel_type}_{channel_id}` 作为 session_id
+- **回退路径**：仅在 `session_manager` 不可用时，使用 `build_session_id()` 构造 `octo_{channel_type}_{channel_id}_{bot_id}` 作为 session_id
 
 映射在 `external_sessions` 表中持久化，重启后也生效。详见文档「架构设计」中 Session Manager 的 `external_sessions` 部分。
 
@@ -174,32 +174,58 @@ preparedPrompt = prependContext + "\n\n" + preparedPrompt
 
 ## 配置
 
-在 `~/.ftre/config.json` 的 `plugins` 数组中：
+在 `~/.ftre/config.json` 的 `plugins` 数组中。支持多 bot：每个 bot 映射到不同的 Agent，同群内不同 bot 的 session 相互隔离。
 
 ```json
 {
   "plugins": [
     {
       "name": "octo_channel",
+      "enabled": true,
       "config": {
-        "bot_token": "bf_xxxxxxxxx",
         "api_url": "https://im.deepminer.com.cn/api",
-        "bridge_port": 9876,
-        "require_mention": true
+        "bots": [
+          {
+            "bot_token": "bf_xxxxxxxxx",
+            "agent_id": "octo",
+            "bot_name": "Octo"
+          },
+          {
+            "bot_token": "bf_yyyyyyyyy",
+            "agent_id": "exodia",
+            "bot_name": "被封印的艾克佐迪亚"
+          }
+        ]
       }
     }
   ]
 }
 ```
 
+### 顶层配置
+
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `bot_token` | string | 必填 | Octo Bot Token（`bf_` 开头） |
 | `api_url` | string | 必填 | Octo HTTP API 地址 |
+| `bots` | array | 必填 | Bot 列表，每个元素对应一个 Octo Bot |
 | `bridge_port` | int | 9876 | 桥接本地 WebSocket 端口 |
 | `require_mention` | bool | true | 群聊中是否必须 @ 才回复。设为 false 则所有消息都回复 |
-| `bot_id` | string | 自动获取 | bot 的 UID。可选预设值；未提供时插件会在 `register_bot()` 后从返回的 `robot_id` 自动获取 |
-| `bot_name` | string | 同 bot_id | bot 名称，用于 @ 检测的文本兜底 |
+
+### bots[] 元素
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `bot_token` | string | 必填 | Octo Bot Token（`bf_` 开头），同时作为 bot_id 标识 |
+| `agent_id` | string | `"default"` | 该 bot 消息路由到的 Agent ID（对应 `~/.ftre/agents/<agent_id>/`） |
+| `bot_name` | string | `"Bot"` | Bot 名称，用于 @ 检测的文本兜底匹配 |
+
+### 多 bot session 隔离
+
+同一群聊中如果有多个 bot，每个 bot 的 session 独立隔离，通过 `bot_id` 维度区分：
+
+- **external_key** 格式：`octo:{channel_type}:{channel_id}:{bot_id}`
+- **历史分段**：`record_bot_reply` 以 `channel_id:bot_id` 为 key 追踪 `last_reply_seq`
+- **回复路由**：通过 `session → bot_id` 映射选择对应 bot 的 API 发送回复
 
 ---
 
@@ -237,10 +263,10 @@ Python 不直接处理 WuKongIM 二进制协议。Node.js 桥接（`octo-bridge.
 
 ### external_key 和 session_id 编解码
 
-- `external_key`（API 调用/映射用）：`octo:{channel_type}:{channel_id}`，私聊时 `channel_id` 为空则用 `from_uid`
+- `external_key`（API 调用/映射用）：`octo:{channel_type}:{channel_id}:{bot_id}`，私聊时 `channel_id` 为空则用 `from_uid`
 - 正常路径：通过 `SessionManager.get_or_create_external_session()` 映射到持久 ftre session
-- 回退 `build_session_id()`：`octo_{channel_type}_{channel_id}`，仅在 `session_manager` 缺失时使用
-- `parse_session_id()`：从 session_id 反向解析 `(channel_type, channel_id)`
+- 回退 `build_session_id()`：`octo_{channel_type}_{channel_id}_{bot_id}`，仅在 `session_manager` 缺失时使用
+- `parse_session_id()`：从 session_id 反向解析 `(channel_type, channel_id, bot_id)`
 
 ### 成员缓存
 

@@ -110,9 +110,16 @@
   default_workspace → 全局默认工作区（创建新 session 时的预填值）
   agents            → Agent 全局配置（title_generation / compact_generation / context）
   providers         → LLM Provider 列表
+  mcp               → MCP 服务器配置（全局，可被 agent.config.json 的 mcp 段覆盖）
   plugins           → 插件配置
+  channels          → Channel 配置（如 WebSocket）
   servers           → Gateway / 前端 / 文档开发服务端口配置
+  disabled_skills   → 全局禁用的 Skill 列表（可被 agent.config.json 整体替换）
 }
+
+// 独立文件：~/.ftre/agents/<agent_id>/agent.config.json
+// 每个 Agent 的专属配置（LLM / tools / mcp / plugins / workspace / disabled_skills）
+// 详见下方「Agent 配置」章节
 ```
 
 ## default_workspace
@@ -199,6 +206,80 @@
 
 > 当前 `api_protocol` 字段虽然存在于 Provider 配置中（默认 `"openai"`），但 `_build_model_name()` 未使用它来拼接前缀。这意味着 `api_protocol` 仅作为配置记录，不影响实际模型名构造，也不会改变 `LLMConfig.api_type`。
 
+## Agent 配置（agent.config.json）
+
+每个 Agent 是 `~/.ftre/agents/<agent_id>/` 下的一个目录，通过 `agent.config.json` 定义独立配置。`default` Agent 的配置作为全局兜底（LLM / workspace），其他 Agent 缺省时回退到 default。
+
+### 目录结构
+
+```
+~/.ftre/agents/
+├── default/
+│   ├── agent.config.json     ← 主 LLM 配置（provider/model）+ 家目录
+│   ├── SOUL.md               ← 人格定义（角色、语气、行为边界）
+│   ├── AGENTS.md             ← 行为规范（工作方式、约束）
+│   ├── USER.md               ← 用户偏好提示词
+│   └── skills/               ← 私有 Skill（可选，自动与全局合并）
+├── coder/
+│   ├── agent.config.json
+│   ├── SOUL.md / AGENTS.md / USER.md
+│   └── skills/
+├── octo/
+│   └── ...
+└── exodia/
+    └── ...
+```
+
+### agent.config.json 字段
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `name` | string | 否 | Agent 显示名称；缺省取目录名（`agent_id`） |
+| `llm` | object | 否 | Agent 专属 LLM 配置；缺省回退到 default agent 的 LLM |
+| `llm.provider` | string | 否 | Provider 名（对应 `config.json` 的 `providers` key） |
+| `llm.model` | string | 否 | 模型 ID（对应 Provider 的 `models[].id`） |
+| `workspace` | string | 否 | Agent 的**家目录**（存放 SOUL/AGENTS/USER.md 的路径）。**注意**：此字段不是对话的 cwd。对话 cwd 由 `session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()` 决定 |
+| `tools` | object | 否 | 工具白/黑名单：`{"allow": [...], "deny": [...]}`。`allow` 缺省表示全部允许；`deny` 列表中的工具名会被移除 |
+| `mcp` | object | 否 | Agent 专属 MCP 服务器配置，深度合并到全局 `config.json` 的 `mcp` 段（同名 key 覆盖） |
+| `plugins` | array | 否 | Agent 专属插件配置，按 `name` 合并到全局 `plugins`（同名条目覆盖） |
+| `disabled_skills` | array | 否 | 禁用的 Skill 名称列表；缺省时沿用全局 `config.json` 的 `disabled_skills`；配置后**整体替换**全局值 |
+
+### 示例
+
+```json
+{
+  "id": "octo",
+  "name": "Octo Bot",
+  "llm": {
+    "provider": "明略网关",
+    "model": "ali/deepseek-v4-flash"
+  },
+  "tools": {
+    "deny": ["cron", "set_workspace", "task"]
+  }
+}
+```
+
+### 提示词文件
+
+三个 Markdown 文件在 Agent 加载时自动读取，以 XML 标签注入到 system_prompt：
+
+| 文件 | 标签 | 注入位置 | 说明 |
+|------|------|---------|------|
+| `SOUL.md` | `<SOUL>` | system_prompt | 人格定义：角色、语气、行为边界 |
+| `AGENTS.md` | `<AGENTS_RULE>` | system_prompt | 行为规范：工作方式、约束（可被工作区同名文件覆盖） |
+| `USER.md` | `<USER_PROFILE>` | system_prompt 末尾 | 用户偏好与个人要求 |
+
+> `AGENTS.md` 有两层来源：Agent 目录下的 `AGENTS.md` 作为基础注入；如果当前工作区也存在 `AGENTS.md`，其内容会追加注入（`<AGENTS_RULE>` 标签），两者叠加生效。
+
+### 私有 Skill
+
+Agent 目录下可创建 `skills/` 子目录，存放该 Agent 专属的 Skill 文件。格式与全局 `~/.ftre/skills/` 一致（`<name>.md` / `<name>/SKILL.md` / `<name>/skill.md`）。
+
+- **合并规则**：全局 Skill 和当前 Agent 私有 Skill 合并展示；同名 Skill 私有版本覆盖全局
+- **加载顺序**：`loadSkill` 工具先搜私有目录，再搜全局目录
+- **场景**：例如 `octo` Agent 可有专属的 `octo-ops.md` Skill，不影响其他 Agent 的 Skill 列表
+
 ## servers
 
 `servers` 是可选配置。未配置时 Gateway 默认监听 `127.0.0.1:48650`（`load_gateway_address()` 的缺省值）；前端 dev 服务默认使用 `48651`；docs 文档站默认使用 `48652`。后端启动时会从 `config.json` 的 `servers.gateway` 读取 host / port，并传入 `WebSocketChannel`；桌面端 `scripts/dev.mjs` 会从 `servers.frontend.port` 读取前端 dev 端口，再通过环境变量注入 `vite.config.ts`；文档站 `E:\ftre-docs\scripts\dev.mjs` 会从 `servers.docs.port` 读取文档站端口，并通过 `vite --port` 注入 `vite.config.ts`（该配置文件的 `server.port` 由命令行 `--port` 覆盖）。`E:\ftre\start.py` 同样会读取 `servers.docs.port` 作为文档站启动端口。
@@ -244,6 +325,6 @@
    - `_load_current_config()` 调用时机：`_step_compact`（`agent/loop.py:363`）、`_run_async`（`agent/loop.py:446`）、`_cmd_compact`（`agent/loop.py:172`）、usage_update 路径（`agent/loop.py:591`）和 idle 路径（`agent/loop.py:649`，调用 `CompactManager.maybe_schedule_idle_compact()`）；另在 `__init__` 的 `_initial_context_cfg`（`agent/loop.py:129`）也被调用——与本文描述一致。
 - **2025-07-11**：补全 `agents.defaults` 表格中缺失的 `system_prompt` 和 `user_prompt` 字段。源码依据：`config.py:236-243`（`load_config()` 中读取 `system_prompt` / `user_prompt`），`context_govern.py:50-63`（`user_prompt` 注入逻辑）。
 - **2026-07-02**：代码重构后复验。`_schedule_idle_compact` 已从 `AgentLoop` 移除，后台压缩调度改由 `CompactManager.maybe_schedule_idle_compact()` 承担。`_load_current_config()` 的调用时机不变，仍在 `_step_compact`（`loop.py:363`）、`_run_async`（`loop.py:446`）、`_cmd_compact`（`loop.py:172`）、usage_update 路径（`loop.py:591`）和 idle 路径（`loop.py:649`）中调用；正文描述仍准确。
-- **2026-07-03**：复验 `_load_current_config()` 调用点行号。代码持续演进后行号偏移，以下为当前正确行号：`_initial_context_cfg`（`loop.py:131`）、`_cmd_compact`（`loop.py:174`）、`_step_compact`（`loop.py:365`）、`_run_async`（`loop.py:454`）、usage_update 路径（`loop.py:612`）、idle 路径（`loop.py:670`）。另：`api_protocol` 默认 `"openai"` 在 `config.py:170`；`_build_model_name()` 在 `config.py:144-145`；`LLMConfig.api_type` 默认 `"completions"` 在 `config.py:51`；`session.get("workspace", "") or os.getcwd()` 在 `loop.py:482`。正文描述仍准确。
-- **2026-07-18**：修正配置路径。`config.json` 的 `agents` 段不存在 `defaults` 子层：`title_generation` / `compact_generation` / `context` 直接挂在 `agents` 下（`config.py:262` / `:274` / `:287`）。`provider` / `model` / `workspace` 已迁移到 `~/.ftre/agents/default/agent.config.json`（`config.py:36-56` `_read_default_agent_llm()`），不再从 `config.json` 读取。`system_prompt` 从 `system_prompt.md` 文件加载（`config.py:284`），不在 `config.json` 配置。`user_prompt`（`USER.md`）由 `agent_manager.py:172` 从 agent 目录读取、`:622-629` 注入为 `<USER_PROFILE>` 标签，同样不在 `config.json` 配置。已删除 `agents.defaults` 表格中的 `provider` / `model` / `workspace` / `system_prompt` / `user_prompt` 行，JSON 示例同步修正。
-- **2026-07-03（workspace 分离）**：`config.json` 新增顶层 `default_workspace` 字段，作为创建新 session 时的预填值。`load_config()` 不再从 default agent 的 `agent.config.json` 读取 `workspace`，改为从 `config.json` 的 `default_workspace` 读取（`config.py:250-254`）。`agent.config.json` 的 `workspace` 字段语义变更为 Agent 的"家目录"（存放 SOUL/AGENTS/USER.md 的路径），不参与 session 的 cwd 决定。`loop.py` 删除 `agent_profile.workspace` 覆盖 `config.workspace` 和 `session workspace` 的逻辑（原 `loop.py:459-460` / `483-484`）。session 运行时 cwd 优先级链改为：`session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()`。前端 `WorkspaceBadge.tsx` / `chat.ts` 的默认工作区读取从 `cfg.agents.defaults.workspace` 改为 `cfg.default_workspace`。
+- **2026-07-03**：复验 `_load_current_config()` 调用点行号。代码持续演进后行号偏移，以下为当前正确行号：`_initial_context_cfg`（`loop.py:131`）、`_cmd_compact`（`loop.py:174`）、`_step_compact`（`loop.py:365`）、`_run_async`（`loop.py:454`）、usage_update 路径（`loop.py:609`）、idle 路径（`loop.py:667`）。另：`api_protocol` 默认 `"openai"` 在 `config.py:195`；`_build_model_name()` 在 `config.py:169-170`；`LLMConfig.api_type` 默认 `"completions"` 在 `config.py:77`；`session.get("workspace", "") or config.workspace or os.getcwd()` 在 `loop.py:480`。正文描述仍准确。
+- **2026-07-18**：修正配置路径。`config.json` 的 `agents` 段不存在 `defaults` 子层：`title_generation` / `compact_generation` / `context` 直接挂在 `agents` 下（`config.py:264` / `:276` / `:289`）。`provider` / `model` / `workspace` 已迁移到 `~/.ftre/agents/default/agent.config.json`（`config.py:36-56` `_read_default_agent_llm()`），不再从 `config.json` 读取。`system_prompt` 从 `system_prompt.md` 文件加载（`config.py:286`），不在 `config.json` 配置。`user_prompt`（`USER.md`）由 `agent_manager.py:172` 从 agent 目录读取、`:622-629` 注入为 `<USER_PROFILE>` 标签，同样不在 `config.json` 配置。已删除 `agents.defaults` 表格中的 `provider` / `model` / `workspace` / `system_prompt` / `user_prompt` 行，JSON 示例同步修正。
+- **2026-07-03（workspace 分离）**：`config.json` 新增顶层 `default_workspace` 字段，作为创建新 session 时的预填值。`load_config()` 不再从 default agent 的 `agent.config.json` 读取 `workspace`，改为从 `config.json` 的 `default_workspace` 读取（`config.py:255-256`）。`agent.config.json` 的 `workspace` 字段语义变更为 Agent 的"家目录"（存放 SOUL/AGENTS/USER.md 的路径），不参与 session 的 cwd 决定。`loop.py` 删除 `agent_profile.workspace` 覆盖 `config.workspace` 和 `session workspace` 的逻辑（原 `loop.py:459-460` / `483-484`）。session 运行时 cwd 优先级链改为：`session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()`。前端 `WorkspaceBadge.tsx` / `chat.ts` 的默认工作区读取从 `cfg.agents.defaults.workspace` 改为 `cfg.default_workspace`。

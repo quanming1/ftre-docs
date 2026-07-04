@@ -59,16 +59,18 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
 
 ## 3. skill — Skills 能力加载
 
-扫描 `~/.ftre/skills/` 下的 Skill 文件（支持 `<name>.md`、`<name>/SKILL.md`、`<name>/skill.md`），注册 `loadSkill` 工具，并在 system_prompt 中注入 Skill 描述列表。
+扫描 `~/.ftre/skills/` 下的全局 Skill 文件和 `~/.ftre/agents/<agent_id>/skills/` 下的 Agent 私有 Skill 文件（支持 `<name>.md`、`<name>/SKILL.md`、`<name>/skill.md`），注册 `loadSkill` 工具，并在 system_prompt 中注入合并后的 Skill 描述列表。
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
-| `skills_dir` | `~/.ftre/skills` | Skill 文件目录 |
+| `skills_dir` | `~/.ftre/skills` | 全局 Skill 文件目录 |
 
 **工作原理：**
 
 - `setup()` 时注册 `loadSkill` 工具（Tool 类），Agent 可以调用它按需读取 Skill 完整内容
-- 注册 `BEFORE_AGENT_RUN` hook，注入 `<skill_desc>` 标签说明 Skill 机制（如何发现与加载）和 `<skill_list>` 标签（可用 Skill 列表），均通过 `append_to_first_system(ctx.messages, ...)` 追加到第一条 system 消息末尾
+- `loadSkill` 工具通过 `Injected("agent_profile")` 从 `runtime_context` 获取当前 Agent 的 `agent_dir`，搜索时先查 `agents/<agent_id>/skills/`（私有），再查全局 `~/.ftre/skills/`
+- 注册 `BEFORE_AGENT_RUN` hook，通过 `ctx.agent_profile` 获取私有 Skill 列表，与全局合并后注入 `<skill_desc>` 标签（说明 Skill 机制）和 `<skill_list>` 标签（可用 Skill 列表），均通过 `append_to_first_system(ctx.messages, ...)` 追加到第一条 system 消息末尾
+- **合并规则**：同名 Skill 私有版本覆盖全局版本（列表只显示私有版本描述，加载时私有目录优先）
 - Agent 根据用户需求自主判断是否需要调用 `loadSkill`，同一个 Skill 只加载一次
 
 ---
