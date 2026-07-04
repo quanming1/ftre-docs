@@ -234,8 +234,9 @@ self.api.register_hook(BEFORE_AGENT_RUN, my_run_hook)
 | `channel_id` | str | 来源 channel |
 | `workspace` | str | 工作区绝对路径 |
 | `events` | list | 事件流（可修改：裁剪/注入/重排） |
-| `config` | AgentConfig | 配置副本（可改 system_prompt / model / llm 等） |
+| `config` | AgentConfig | 配置副本（可改 `system_prompt` / `llm` / `max_iterations` 等，[完整字段见下文](#agentconfig-字段说明)） |
 | `inbound_data` | dict | 当前用户消息的原始 data |
+| `agent_dir` | str | Agent 的家目录绝对路径（存放提示词文件的目录，来自 `agent_profile.agent_dir`；只读） |
 | `event_loop` | Any | 主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。**注意**：当前 `AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时未传入此字段，因此 `ctx.event_loop` 为 `None`；插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` |
 
 `MessagesBuildContext` 包含上述所有字段。**注意**：当前 `AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时未传入 `event_loop`，因此 `ctx.event_loop` 为 `None`。插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop`（该属性在 `PluginManager` 构造时已通过 `event_loop=lambda: event_loop` 注入，通常指向主事件循环）。
@@ -264,7 +265,7 @@ def my_hook(ctx):
 | `session_id` | str | 当前会话 ID（只读） |
 | `channel_id` | str | 来源 channel（只读） |
 | `messages` | list[dict] | OpenAI 格式消息列表（可增删改） |
-| `config` | AgentConfig | 配置深拷贝（可读） |
+| `config` | AgentConfig | 配置深拷贝（可读，[完整字段见下文](#agentconfig-字段说明)） |
 
 **使用示例：**
 
@@ -296,6 +297,51 @@ def my_hook(ctx):
 | 主要用途 | 事件流清洗/裁剪/注入、system_prompt 修改 | system/user 消息双轨注入 |
 | 可改字段 | events, config | messages, config |
 | 典型使用者 | context_govern, title_gen | mcp（注入 MCP 工具说明）、skill（注入 Skill 说明和列表）、octo（注入群聊上下文） |
+
+---
+
+## AgentConfig 字段说明
+
+Hook 上下文中的 `config` 是 `AgentConfig` 的副本（`before_messages_build` 可改，`before_agent_run` 只读）。以下是完整字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `llm` | `LLMConfig` | 主 LLM 配置（详见下表） |
+| `system_prompt` | `str` | 系统提示词，默认从 `system_prompt.md` 加载。`before_messages_build` hook 可修改 |
+| `max_iterations` | `int \| None` | Agent 最大迭代轮数；`None` 表示用框架默认值 |
+| `workspace` | `str` | 默认工作区。空字符串表示走进程 cwd 兜底 |
+| `title_llm` | `LLMConfig \| None` | 标题生成专用 LLM；`None` 表示沿用主 `llm` |
+| `compact_llm` | `LLMConfig \| None` | 上下文压缩专用 LLM；`None` 表示沿用主 `llm` |
+| `context` | `ContextConfig` | 上下文管理配置（详见下表） |
+
+### LLMConfig 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `api_key` | `str` | API 密钥（来自 `providers[provider]`） |
+| `api_base` | `str` | API 基础 URL（来自 `providers[provider]`） |
+| `api_type` | `str` | API 类型，默认 `"completions"` |
+| `name` | `str` | 模型显示名（来自 `providers[provider].models[]` 中匹配的条目） |
+| `id` | `str` | 模型原始 ID |
+| `context_window` | `int \| None` | 上下文窗口大小（token 数） |
+| `max_output` | `int \| None` | 最大输出 token 数 |
+| `vision` | `bool` | 是否支持视觉输入 |
+| `model` | `str` | 派生的 LiteLLM 模型名（含 provider 前缀），供 ReActAgent 直接使用 |
+
+### ContextConfig 字段
+
+对应 `config.json` 的 `agents.context`，所有字段都有默认值，缺省即用代码内常量。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `precompact_threshold` | `float` | `0.5` | 预压缩水位：`estimated_tokens / context_window ≥ 此值` 时后台准备摘要 |
+| `compact_threshold` | `float` | `0.6` | 启用压缩水位：达到此值时启用已准备的摘要 |
+| `consolidation_ratio` | `float` | `0.5` | 压缩目标比例：`target = budget * consolidation_ratio` |
+| `safety_buffer` | `int` | `1024` | 预算安全垫：`budget = context_window - max_output - safety_buffer` |
+| `idle_compaction` | `bool` | `True` | 是否开启后台空闲压缩（每轮 done 后异步 LLM 摘要） |
+| `silent` | `bool` | `True` | 压缩事件是否标记 silent（前端不渲染气泡，对用户无感） |
+
+---
 
 ### 自定义 Hook
 
@@ -384,7 +430,7 @@ class MyTool(Tool):
    - `FtrePluginApi` 暴露的方法与属性（`register_channel` / `register_hook` / `register_router` / `tool_registry` / `command_manager` / `event_loop`）与 `plugin/plugin.py` 一致；
    - `PluginManager.__init__` 接受 `command_manager` 参数（`plugin/plugin.py`），并在 `_load` 时将其透传给 `FtrePluginApi`；
    - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
-    - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:52-75` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:695-702`）；
+    - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `agent_dir` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:52-76` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:714-722`）；
    - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py` 一致；
    - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具；插件同名工具之间在 `ftre.tools.ToolRegistry.register()` 阶段会抛 `ValueError`；
  - **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:95-97`（`register_router`）。
@@ -396,4 +442,5 @@ class MyTool(Tool):
      - 现有 `before_messages_build` hook 在 `AgentLoop._build_messages()` 中触发，代码在 `agent/loop.py:691-705`。
 - **2025-12-18**：修正 `before_agent_build` hook 文档错误。经核实，代码中不存在 `BEFORE_AGENT_BUILD` / `AgentBuildContext`，`hook_manager.py` 只定义 `BEFORE_MESSAGES_BUILD`（`hook_manager.py:29`）和 `BEFORE_AGENT_RUN`（`hook_manager.py:30`）。`mcp` 和 `skill` 插件实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system()` 将提示词追加到第一条 system 消息末尾（非 `ctx.system_prompt`）。删除文档中虚构的 `before_agent_build` hook 章节，修正所有相关引用。
 - **2026-07-18**：修正 `MessagesBuildContext` 行号引用。原记录标注 `plugin/hook_manager.py:33-57`，但该范围内 33-48 为 `append_to_first_system` 函数，`MessagesBuildContext` 类定义实际起始行为 `hook_manager.py:52`。修正为 `plugin/hook_manager.py:52-75`。字段内容本身与源码一致，仅行号因代码重构偏移。
-- **2026-07-03**：复验校对记录中 `loop.py` 行号。代码持续演进后偏移，以下为当前正确行号：`MessagesBuildContext` 构造在 `loop.py:718-726`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:568-577`（原记录标注 `546-556`）；`before_messages_build` hook 触发在 `loop.py:717-727`（原记录标注 `691-705`）。正文描述的所有行为仍准确。
+- **2026-07-03**：复验校对记录中 `loop.py` 行号。代码持续演进后偏移，以下为当前正确行号：`MessagesBuildContext` 构造在 `loop.py:714-722`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:564-574`（原记录标注 `546-556`）；`before_messages_build` hook 触发在 `loop.py:710-725`（原记录标注 `691-705`）。正文描述的所有行为仍准确。
+- **2026-07-04**：新增「AgentConfig 字段说明」章节。用户反馈 hook 上下文中引用的 `AgentConfig` 从未列出完整字段。与 `config.py:62-128` 核对，补充 `AgentConfig`（7 字段）、`LLMConfig`（9 字段）、`ContextConfig`（6 字段）的完整表格，并在两处 hook 上下文表格中添加交叉引用。
