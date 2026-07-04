@@ -25,8 +25,12 @@ ftre 的插件系统允许你在不修改核心代码的前提下，扩展 Agent
 ~/.ftre/
 ├── config.json          ← 在这里配置插件
 └── plugins/
-    └── my_plugin.py     ← 在这里写插件代码
+    └── my-plugin/       ← 每个子目录是一个插件 package
+        ├── plugin.py    ← 任意 .py 文件（非 _ 前缀），暴露 Plugin 子类即可
+        └── helper.py    ← 插件内部模块
 ```
+
+插件以**子目录**形式存放。Gateway 启动时扫描 `~/.ftre/plugins/` 下的每个子目录，将目录加入 `sys.path`，然后扫描其中所有非 `_` 前缀的 `.py` 文件，找到 `Plugin` 子类自动实例化并加载。
 
 ---
 
