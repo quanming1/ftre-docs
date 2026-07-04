@@ -34,11 +34,9 @@ export const docs: DocEntry[] = [
   { path: 'octo-plugin', title: 'Octo Channel 插件', category: '插件' },
 
   // 配置
-  { path: 'config-file', title: 'config.json 配置', category: '配置' },
+  { path: 'config-file', title: '配置', category: '配置' },
   { path: 'mcp', title: 'MCP 服务器', category: '配置' },
-
-  // Skill
-  { path: 'skill', title: 'Skill 体系', category: 'Skill' },
+  { path: 'skill', title: 'Skill', category: '配置' },
 
   // 客户端
   { path: 'client/session-loading', title: '切换 Session 数据加载', category: '客户端' },
