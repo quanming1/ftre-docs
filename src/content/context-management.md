@@ -48,7 +48,7 @@
 
 触发源：
 - 每轮 `done` 后的 idle 检查（subagent channel 除外）。
-- LLM stream 产生 `usage_update` 后的实时水位检查（subagent channel 除外）。
+- LLM stream 产生 `assistant_message_complete`（含 `metadata.usage`）后的实时水位检查（subagent channel 除外）。
 
 行为：
 - `should_compact(threshold=precompact_threshold=0.5)` 检查水位。
@@ -152,10 +152,9 @@ elif _t == "context_compact":
     data = event["data"] or {}
     if data.get("enabled", True) is not True:
         continue
-    _flush_tool_calls()       # 收束之前累积的 tool_call
-    _take_reasoning()         # 丢弃未挂载的 reasoning
+    # 新格式直读，不需要 flush 缓冲
+    messages = []              # 清空之前累积的 messages
     summary = data.get("summary", "")
-    messages = []
     if summary:
         messages.append({"role": "user", "content": f"[历史上下文摘要]\n{summary}"})
 ```
@@ -171,7 +170,7 @@ elif _t == "context_compact":
 
 | 时机 | 水位 | 行为 | silent |
 |------|------|------|--------|
-| `usage_update` 实时监测 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发 | `config.context.silent`（默认 `true`） |
+| `assistant_message_complete` 实时监测 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发 | `config.context.silent`（默认 `true`） |
 | 每轮 `done` 后 idle 检查 | `>= 0.5`（`precompact_threshold`） | `compact(enabled=True)` 直接写入已启用压缩事件；subagent channel 不触发；冷却期内跳过 | `config.context.silent`（默认 `true`） |
 | 用户下一轮输入前 | `>= 0.5`（`precompact_threshold`） | 标记 `need_compact=True`；实际在 `_run_async` 中先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True)` | `config.context.silent`（默认 `true`） |
 | 用户手动 `/compact` | 无需水位 | 先尝试 `enable_pending_compact()`，没有则 `compact(enabled=True, silent=False)` | `false` |
@@ -283,101 +282,5 @@ ftre 的差异：
 
 ## 校对记录
 
-- **2025-07-17**：与 `ftre/src/ftre/agent/compact_handler.py` / `ftre/src/ftre/agent/loop.py` / `ftre/src/ftre/session/manager.py` / `ftre/src/ftre/config.py` 完整核对，**所有关键事实均与源码一致**：
-  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_handler.py:44-45`）；
-  - `ContextConfig` dataclass 字段（`precompact_threshold` / `compact_threshold` / `consolidation_ratio` / `safety_buffer` / `idle_compaction` / `silent`）与 `config.py:59-76` 一致；
-  - 实际触发路径统一使用 `precompact_threshold`：`_step_compact`、`maybe_schedule_idle_compact`、`_run_async` 的 `enable_pending_compact → compact(enabled=True)` 都显式传入该阈值；
-  - `compact_threshold` 当前仅作为 `enable_ratio` 元数据写入 `context_compact` 事件，不参与触发决策；
-  - `should_compact()` 默认阈值是 `compact_threshold`，但所有调用方都显式传入 `precompact_threshold`，与本文描述一致；
-  - 自动压缩的 `silent` 取 `config.context.silent`（默认 `true`），后台 idle/usage 路径与用户输入关键路径均按该配置传入 `CompactHandler`，手动 `/compact` 固定 `silent=False`；
-  - 后台 idle/usage 路径的冷却机制（`_compact_retry_after`，`COMPACT_UNRETRYABLE_LLM_CODES = {"auth_error", "bad_request", "content_filter"}`，`COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`）仅作用于后台路径，不影响用户输入路径和手动 `/compact`；
-  - 后台路径去重通过 `_compact_tasks` 保证同一 session 同一时间最多一个后台 compact task 在飞；
-  - `compact()` 实际写入的 `context_compact` 事件字段：`summary` / `enabled` / `trigger_ratio` / `enable_ratio` / `events_before` / `tokens_before` / `tokens_after`（仅 enabled=true）/ `silent`（仅 silent=true），与本文表格一致；
-  - `enable_pending_compact()` 启用历史 pending 时，`tokens_after` 估算包含 tail 事件；`compact()` 写入时无 tail，仅估算 summary 本身；
-  - `_notify()` 全异步：`await self.bus.publish_outbound(msg)`，无需 `run_coroutine_threadsafe`；
-  - `to_openai_messages()` 中 `context_compact(enabled=True)` 触发 `_flush_tool_calls()` + `_take_reasoning()` 后清空 messages，注入 `[历史上下文摘要]\n{summary}` 作为 user 消息起点；
-  - `head` 范围：从上一个 `enabled=true` 的 compact 之后全量；`get_cursor_index()` 返回「上一条已启用 compact 的下一位」；
-  - `get_pending_compact_index()` 查找 `enabled=False` 的 pending；
-  - LLM 摘要走 `_run_compact_llm` 直调，无 subagent、无 raw 模式，prompt 模板 `SUMMARY_TEMPLATE` + 系统提示 `COMPACT_LLM_SYSTEM_PROMPT`；
-  - 摘要基本有效性校验：非空 + 长度 ≥ 200 + 包含 `## `；
-  - `_serialize_events` 把事件流转成 `[User]: ...` / `[Assistant]: ...` / `[Assistant reasoning]: ...` / `[Assistant tool call]: ...` / `[Tool result]: ...` 等文本，tool_result 默认截断 2000 字符。
-- **2025-07-02**：再次严肃对照 `ftre/src/ftre/agent/compact_handler.py`、`ftre/src/ftre/agent/loop.py`、`ftre/src/ftre/session/manager.py`、`ftre/src/ftre/config.py`，本文关于触发阈值、`silent` 行为、pending 兼容路径、后台冷却、`context_compact` 字段与 `to_openai_messages()` 重建逻辑的描述仍与当前源码一致，无需正文修订。
-- **2025-12-18**：修正 `to_openai_messages()` 中 `context_compact` 处理逻辑的行号引用：`session/manager.py:696-714` → `session/manager.py:801-819`（代码重构后行号偏移，逻辑内容不变）。
-- **2026-07-18**：全面复核对齐。逐项验证 `compact_handler.py` / `loop.py` / `config.py` / `session/manager.py`：
-  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_handler.py:44-45`）✅；
-  - `ContextConfig` 六个字段默认值（`config.py:59-76`）✅；
-  - 所有调用方显式传入 `precompact_threshold`：`_step_compact`（`loop.py:352`）、`maybe_schedule_idle_compact`（`compact_handler.py:463`）✅；
-  - `should_compact()` 默认阈值为 `config.context.compact_threshold`（`compact_handler.py:130`）✅；
-  - `_run_async` 关键路径 `enable_pending_compact → compact(enabled=True, silent=silent)`（`loop.py:447-463`）✅；
-  - `_cmd_compact` 流程：`enable_pending_compact(silent=False) → compact(enabled=True, silent=False)` + `session_status` 广播（`loop.py:162-193`）✅；
-  - 冷却机制 `COMPACT_UNRETRYABLE_LLM_CODES` / `COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`（`compact_handler.py:48-49`）仅作用于后台路径 ✅；
-  - `compact()` 写入的 `context_compact` 字段：`summary` / `enabled` / `trigger_ratio` / `enable_ratio` / `events_before` / `tokens_before` / `tokens_after`(仅 enabled=true) / `silent`(仅 silent=true)（`compact_handler.py:300-317`）✅；
-  - `enable_pending_compact()` 启用时 `tokens_after` 包含 tail 事件（`compact_handler.py:187`）✅；
-  - `_notify()` 全异步 `await self.bus.publish_outbound(msg)`（`compact_handler.py:409-426`）✅；
-  - `to_openai_messages()` 中 `context_compact(enabled=True)` 触发 `_flush_tool_calls()` + `_take_reasoning()` 后清空 messages 并注入 `[历史上下文摘要]\n{summary}`（`session/manager.py:801-819`）✅；
-  - `get_cursor_index()` 返回「上一条已启用 compact 的下一位」（`compact_handler.py:652`）✅；
-  - LLM 摘要走 `_run_compact_llm` 直调，优先 `compact_llm` 回退主 llm（`compact_handler.py:379`），无 subagent ✅；
-  - 摘要校验：非空 + 长度 ≥ 200 + 包含 `## `（`compact_handler.py:395`）✅；
-  - `_serialize_events` 格式与 tool_result 截断 2000 字符（`compact_handler.py:517-582`）✅；
-   - 正文所有关键事实与源码一致，无需修订。
-- **2026-07-02**：代码重构后复验。后台压缩调度逻辑从 `AgentLoop._schedule_idle_compact()` 迁移到 `CompactHandler.maybe_schedule_idle_compact()`；`COMPACT_UNRETRYABLE_LLM_CODES` / `COMPACT_UNRETRYABLE_COOLDOWN_SECONDS` 常量及 `_compact_tasks` / `_compact_retry_after` 状态从 `loop.py` 迁移到 `compact_handler.py`；`_last_llm_error`（单值）改为 `_last_llm_errors`（按 session_id 隔离的 dict）。**正文描述的所有行为仍与源码一致**，无需修订：
-  - `_step_compact`（`loop.py:352`）、`maybe_schedule_idle_compact`（`compact_handler.py:463`）均显式传入 `precompact_threshold` ✅；
-  - `_run_async` 关键路径 `enable_pending_compact → compact(enabled=True, silent=silent)`（`loop.py:447-463`）✅；
-  - `_cmd_compact` 流程（`loop.py:162-193`）✅；
-  - 冷却机制常量现位于 `compact_handler.py:48-49`，仅作用于后台路径 ✅；
-  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_handler.py:44-45`）✅；
-  - `compact()` 写入字段、`enable_pending_compact()` 的 `tokens_after` 包含 tail、`_notify()` 全异步、`get_cursor_index()`、`_run_compact_llm` 直调、摘要校验、`_serialize_events` 截断逻辑均不变 ✅；
-  - 上一条校对记录中的行号因代码重构偏移，以本条为准。
-- **2026-07-03**：全面复验正文事实与行号。正文所有关键行为仍与源码一致，仅校对记录中的行号因代码持续演进而偏移，以下为当前正确行号：
-  - `_step_compact`（`loop.py:354`）、`maybe_schedule_idle_compact`（`compact_handler.py:435`，threshold 参数在 `:463`）均显式传入 `precompact_threshold` ✅；
-  - `_run_async` 关键路径 `if need_compact: enable_pending_compact → compact(enabled=True, silent=silent)`（`loop.py:461-479`）✅；
-  - `_cmd_compact` 流程（`loop.py:164-195`）✅；
-  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_handler.py:44-45`）✅；
-  - `ContextConfig` 字段默认值（`config.py:62-80`）✅；
-  - 冷却机制常量 `COMPACT_UNRETRYABLE_LLM_CODES` / `COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`（`compact_handler.py:48-49`）✅；
-  - `compact()` 写入字段（`compact_handler.py:300-317`）✅；
-  - `enable_pending_compact()` 的 `tokens_after` 包含 tail（`compact_handler.py:187`）✅；
-  - `_notify()` 全异步（`compact_handler.py:409-426`）✅；
-  - `to_openai_messages()` 中 `context_compact` 处理（`session/manager.py:801-819`）✅；
-  - `get_cursor_index()`（`compact_handler.py:652`）✅；
-  - `_run_compact_llm` 直调，优先 `compact_llm` 回退主 llm（`compact_handler.py:380`）✅；
-  - 摘要校验：非空 + 长度 ≥ 200 + 包含 `## `（`compact_handler.py:395`）✅；
-  - `_serialize_events` 格式与 tool_result 截断 2000 字符（`compact_handler.py:517-582`）✅。
-- **2026-07-03（补充）**：源码文件/类名重命名校对。`ftre/src/ftre/agent/compact_handler.py` 已重命名为 `compact_manager.py`，类 `CompactHandler` → `CompactManager`（`compact_manager.py:101`）。正文已同步修正两处 `CompactHandler` 引用（§2 注释、§4.4）。逐项复验 `compact_manager.py`，所有关键事实与行号不变：
-  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_manager.py:44-45`）✅；
-  - `ContextConfig` 六个字段默认值（`config.py:88-106`）✅；
-  - `_step_compact`（`loop.py:354`，threshold 参数在 `:370`）显式传入 `precompact_threshold` ✅；
-  - `maybe_schedule_idle_compact`（`compact_manager.py:435`，threshold 参数在 `:463`）显式传入 `precompact_threshold` ✅；
-  - `should_compact()` 默认阈值为 `config.context.compact_threshold`（`compact_manager.py:130`）✅；
-  - `_run_async` 关键路径 `enable_pending_compact → compact(enabled=True, silent=silent)`（`loop.py:461-479`）✅；
-  - `_cmd_compact` 流程 `enable_pending_compact(silent=False) → compact(enabled=True, silent=False)` + `session_status` 广播（`loop.py:164-195`）✅；
-   - `usage_update` 实时路径（`loop.py:607-612`）与 `done` 后 idle 路径（`loop.py:665-670`）均调用 `maybe_schedule_idle_compact` 且排除 subagent channel ✅；
-  - 冷却机制 `COMPACT_UNRETRYABLE_LLM_CODES` / `COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`（`compact_manager.py:48-49`）仅作用于后台路径 ✅；
-  - `compact()` 写入字段（`compact_manager.py:300-317`）✅；
-  - `enable_pending_compact()` 的 `tokens_after` 包含 tail（`compact_manager.py:187`）✅；
-  - `_notify()` 全异步（`compact_manager.py:409-426`）✅；
-  - `to_openai_messages()` 中 `context_compact` 处理（`session/manager.py:801-819`）✅；
-  - `get_cursor_index()`（`compact_manager.py:652`）✅；
-  - `_run_compact_llm` 直调，优先 `compact_llm` 回退主 llm（`compact_manager.py:380`）✅；
-  - 摘要校验：非空 + 长度 ≥ 200 + 包含 `## `（`compact_manager.py:395`）✅；
-  - `_serialize_events` 格式与 tool_result 截断 2000 字符（`compact_manager.py:517-582`）✅；
-  - 以上所有校对记录中的 `compact_handler.py` 引用因文件重命名失效，以本条 `compact_manager.py` 为准。
-- **2026-07-19**：行号复验。代码持续演进后偏移，以下为当前正确行号：
-  - `DEFAULT_PRECOMPACT_THRESHOLD = 0.5` / `DEFAULT_COMPACT_THRESHOLD = 0.6`（`compact_manager.py:44-45`）✅；
-  - `ContextConfig` 六个字段默认值（`config.py:88-106`）✅；
-  - `_step_compact`（`loop.py:388`）显式传入 `precompact_threshold` ✅；
-  - `maybe_schedule_idle_compact`（`compact_manager.py:463`）显式传入 `precompact_threshold` ✅；
-  - `should_compact()` 默认阈值为 `config.context.compact_threshold`（`compact_manager.py:130`）✅；
-  - `_run_async` 关键路径 `if need_compact: enable_pending_compact → compact(enabled=True, silent=silent)`（`loop.py:479-497`）✅；
-  - `_cmd_compact` 流程 `enable_pending_compact(silent=False) → compact(enabled=True, silent=False)` + `session_status` 广播（`loop.py:172-207`）✅；
-  - `usage_update` 实时路径（`loop.py:633-643`）与 `done` 后 idle 路径（`loop.py:695-703`）均调用 `maybe_schedule_idle_compact` 且排除 subagent channel ✅；
-  - 冷却机制 `COMPACT_UNRETRYABLE_LLM_CODES` / `COMPACT_UNRETRYABLE_COOLDOWN_SECONDS = 300`（`compact_manager.py:48-49`）仅作用于后台路径 ✅；
-  - `compact()` 写入字段（`compact_manager.py:298-317`）✅；
-  - `enable_pending_compact()` 的 `tokens_after` 包含 tail（`compact_manager.py:186-187`）✅；
-  - `_notify()` 全异步（`compact_manager.py:409-426`）✅；
-  - `to_openai_messages()` 中 `context_compact` 处理（`session/manager.py:801-819`）✅；
-  - `get_cursor_index()`（`compact_manager.py:652`）✅；
-  - `_run_compact_llm` 直调，优先 `compact_llm` 回退主 llm（`compact_manager.py:380`）✅；
-  - 摘要校验：非空 + 长度 ≥ 200 + 包含 `## `（`compact_manager.py:395`）✅；
-  - `_serialize_events` 格式与 tool_result 截断 2000 字符（`compact_manager.py:517-582`）✅；
-  - 正文所有关键事实与源码一致，无需修订。
+- **2026-07-19**：行号复验。代码持续演进后偏移，所有关键行为仍与源码一致。
+- **2026-07-20**：协议改造对齐。`usage_update` / `reasoning_complete` / `tool_call` 三个独立事件已合并到 `assistant_message_complete`（分别嵌入 `metadata.usage` / `content[].thinking` / `content[].toolCall`）；compact 调度触发从 `usage_update` 改为 `assistant_message_complete.metadata.usage`；`to_openai_messages()` 中 `context_compact` 处理不再需要 `_flush_tool_calls()` / `_take_reasoning()`（新格式直读，无缓冲）；`_serialize_events` 改为从 `assistant_message_complete.content[]` 拆出 text/thinking/toolCall。

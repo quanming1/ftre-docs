@@ -59,7 +59,7 @@
 
 ### EventBus
 
-消息中枢，负责 inbound/outbound 消息路由。生产者和消费者通过 `publish_inbound`/`publish_outbound` 与 `subscribe_inbound`/`subscribe_outbound` 解耦；支持通过 `use_inbound`/`use_outbound` 注册中间件，对消息做过滤（返回 `None` 丢弃消息）或改写（返回修改后的 `BusMessage`）。
+消息中枢，负责 inbound/outbound 消息路由。生产者和消费者通过 `publish_inbound`/`publish_outbound` 与 `subscribe_inbound`/`subscribe_outbound` 解耦。
 
 ### Channel
 
@@ -116,7 +116,7 @@
 - `tool_registry` 属性 — 返回 `ToolRegistry` 实例，插件通过 `self.api.tool_registry.register(tool)` 注册 Tool
 - `register_hook()` — 注册生命周期 Hook
 - `register_router()` — 注册 FastAPI APIRouter，挂载到 `/api` 前缀下
-- system prompt 注入：`append_system_prompt()` API 已移除。插件通过 hook 注入：`BEFORE_AGENT_RUN` hook 操作 `ctx.messages`（`McpPlugin` / `SkillPlugin` 通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾）；`BEFORE_MESSAGES_BUILD` hook 可直接修改 `ctx.config.system_prompt`（`ContextGovernPlugin` 用于注入 AGENTS.md 和用户自定义提示词）
+- system prompt 注入：`append_system_prompt()` API 已移除。插件通过 hook 注入：`BEFORE_AGENT_RUN` hook 操作 `ctx.messages`（`McpPlugin` / `SkillPlugin` 通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾）；`BEFORE_MESSAGES_BUILD` hook 可直接修改 `ctx.config.system_prompt`（`ContextGovernPlugin` 用于注入 AGENTS.md）
 - `command_manager` 属性 — 返回 `CommandManager` 实例，插件可通过 `api.command_manager.register()` 注册斜杠指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`，因此 `FtrePluginApi.command_manager` 运行时为 `CommandManager` 实例而非 `None`。系统级指令（如 `/cancel`，`system=True`）在锁外执行；普通指令在 Pipeline 锁内执行
 - `event_loop` 属性 — 返回主 asyncio 事件循环引用（插件用于 `run_coroutine_threadsafe`）。当前 `main.py` 通过 `event_loop=lambda: event_loop` 在 `PluginManager` 构造函数中传入事件循环，`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）
 
@@ -130,7 +130,7 @@
 - `should_compact()`：水位判断（async，只读 DB），默认会看 `compact_threshold`，但当前所有调用方都显式传入 `precompact_threshold`（默认 0.5）
 - `compact()`：异步执行 LLM 直调摘要；当前后台 idle/usage 路径与用户输入关键路径实际都写 `context_compact(enabled=true)`。`compact(enabled=False)` 分支仍保留在代码里，作为兼容历史预压缩/pending 逻辑的入口，但当前没有调用方传入 `False`
 - `enable_pending_compact()`：把历史上可能存在的 pending（`enabled=false`）`context_compact` 原地更新为 `enabled=true`；当前没有新写入 `enabled=false` 的路径，因此该调用通常返回 `False`，随后回退到 `compact(enabled=true)`
-- `maybe_schedule_idle_compact()`：后台 idle/usage 压缩调度入口（由 `AgentLoop` 在 `done` / `usage_update` 后调用）。内部持有 `_compact_tasks` 去重 + `_compact_retry_after` 冷却退避，在 session lock 之外通过 `asyncio.create_task` 异步执行 `compact(enabled=true)`
+- `maybe_schedule_idle_compact()`：后台 idle/usage 压缩调度入口（由 `AgentLoop` 在 `assistant_message_complete`（含 `metadata.usage`）后调用）。内部持有 `_compact_tasks` 去重 + `_compact_retry_after` 冷却退避，在 session lock 之外通过 `asyncio.create_task` 异步执行 `compact(enabled=true)`
 
 ### 工具能力裁剪（Tool Capability Gating）
 
@@ -158,7 +158,7 @@ def build_default_tools(..., llm_config=None):
 
 ### Agent 事件体系
 
-事件从裸 dict 迁移为 `@dataclass` 类（12 个子类含 `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。
+事件从裸 dict 迁移为 `@dataclass` 类（7 个子类：`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `DoneEvent` / `ErrorEvent` / `RetryEvent` / `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。
 
 ## 校对记录
 
@@ -168,15 +168,10 @@ def build_default_tools(..., llm_config=None):
   - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
   - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
   - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
-   - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ReasoningCompleteEvent` / `ToolCallEvent` / `ToolResultEvent` / `DoneEvent` / `UsageUpdateEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py:394-403` 一致；
+   - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ToolResultEvent` / `DoneEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py` 一致；
    - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router`）与 `ftre/src/ftre/plugin/plugin.py` 一致；`append_system_prompt` 已移除，插件通过 `BEFORE_AGENT_RUN` / `BEFORE_MESSAGES_BUILD` hook 注入 system prompt；
    - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:695-702` 一致；
   - `CompactManager.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_manager.py` 一致；
 - `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
-- **2025-07-15**：补全 `read` 工具目录列举功能描述，与 `read.py:187-189` 的 `_list_dir` 一致。
-- **2025-07-16**：修正 `_list_dir` 行号引用。函数定义在 `read.py:45-55`，调用点在 `read.py:187-189`。原记录仅标注了调用点行号。
- - **2025-12-18**：修正 system prompt 注入 hook 描述。`McpPlugin` / `SkillPlugin` 实际注册 `BEFORE_AGENT_RUN`，通过 `append_to_first_system(ctx.messages, ...)` 将提示词追加到第一条 system 消息末尾。源码依据：`mcp_plugin.py:19,36,51-60`、`skill_plugin.py:16,49,51-66`、`hook_manager.py:33-48`（`append_to_first_system` 工具函数）。
-- **2026-07-02**：代码重构后复验。`CompactManager` 新增 `maybe_schedule_idle_compact()` 方法，承接原 `AgentLoop._schedule_idle_compact()` 的后台压缩调度职责；`_compact_tasks` / `_compact_retry_after` / `COMPACT_UNRETRYABLE_*` 常量从 `loop.py` 迁移到 `compact_manager.py`。正文描述的所有行为仍准确，已在主要入口列表中补充 `maybe_schedule_idle_compact()`。
-- **2026-07-03**：复验校对记录中的行号。代码持续演进后偏移，以下为当前正确行号：`_PERSISTENT_CLASSES` 在 `loop.py:396-405`（原记录标注 `394-403`）；`MessagesBuildContext` 构造在 `loop.py:714-722`（原记录标注 `695-702`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:564-574`（原记录标注 `546-556`）。正文描述的所有行为仍准确。
-- **2026-07-03（补充）**：源码文件/类名重命名校对。`compact_handler.py` → `compact_manager.py`，类 `CompactHandler` → `CompactManager`（`compact_manager.py:101`）。正文 §CompactManager 标题、§校对记录中所有 `CompactHandler` / `compact_handler.py` 引用已同步修正。逐项复验 `compact_manager.py`，所有关键行为与行号不变。
-- **2026-07-19**：行号复验。代码持续演进后偏移，以下为当前正确行号：`_PERSISTENT_CLASSES` 在 `loop.py:414-423`（原记录标注 `396-405`）；`MessagesBuildContext` 构造在 `loop.py:745-756`（原记录标注 `714-722`），该字段确实未传入 `event_loop`；`before_agent_run` hook 触发在 `loop.py:587-599`（原记录标注 `564-574`）。正文所有关键事实与源码一致，无需修订。
+- **2026-07-19**：行号复验。代码持续演进后偏移，所有关键行为仍与源码一致。
+- **2026-07-20**：协议改造。`_PERSISTENT_CLASSES` 删除 `ReasoningCompleteEvent` / `ToolCallEvent` / `UsageUpdateEvent`（已合并到 `AssistantMessageCompleteEvent`）；compact 调度触发从 `done / usage_update` 改为 `assistant_message_complete.metadata.usage`；`to_openai_messages()` 从 pending_* 缓冲逻辑简化为直读 `content[]`。

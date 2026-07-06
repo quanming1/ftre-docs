@@ -71,7 +71,7 @@ BusMessage 的主要构造入口：
 |---------|------|
 | `Channel.receive()` | WebSocket / Subagent / `send_message(kind="invoke")` 等入口投递 `user_message`；所有入站消息统一走 `kind="user_message"`（前端 cancel 帧在 ws_channel 层已转为 `/cancel` user_message） |
 | `CronScheduler._tick()` | 直接构造 BusMessage（`from_channel=self.default_channel`，默认 `"cron"`）并调用 `bus.publish_inbound()` 投递 `user_message`，不经过 `Channel.receive()` |
-| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_message` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`assistant_message_complete` / `reasoning_complete` / `tool_call` / `tool_result` / `user_message` / `usage_update` / `error` / `done` 会按 `_PERSISTENT_CLASSES` 白名单写入 DB（`assistant_message`、`reasoning`、`tool_call_streaming` 流式增量不持久化；`retry` 不在白名单中，同样不持久化；`tool_cancel_requested` / `tool_cancelled` 无对应事件类，不产出也不持久化）。`_run_async()` 在主事件循环内直接 await 执行，不需要 `run_in_executor` 或 `asyncio.run()`。取消或异常导致 `AgentLoop._run_async()` 自行补发的 `done` 只发送 outbound，不走 `_PERSISTENT_CLASSES` 入库路径 |
+| `AgentLoop._run_async()` | 构造 `agent_event`，包括 `user_message` echo 和 Agent 运行事件；`agent.run()` 正常 yield 出来的 Agent 事件中，`assistant_message_complete` / `tool_result` / `user_message` / `error` / `done` 会按 `_PERSISTENT_CLASSES` 白名单写入 DB（流式 `assistant_message` 不持久化；`retry` 不在白名单中，同样不持久化）。`_run_async()` 在主事件循环内直接 await 执行，不需要 `run_in_executor` 或 `asyncio.run()`。取消或异常导致 `AgentLoop._run_async()` 自行补发的 `done` 只发送 outbound，不走 `_PERSISTENT_CLASSES` 入库路径 |
 | `AgentLoop._publish_session_status_async()` | 构造 `global_event(session_status)`，直接 `await bus.publish_outbound()` |
 | `AgentLoop._cmd_compact()` | `/compact` 指令内部构造 `global_event(session_status)`（compacting / idle），直接 `await self._publish_session_status_async()` |
 | `send_message._do_notify()` | 构造 `agent_event(external_message)` |

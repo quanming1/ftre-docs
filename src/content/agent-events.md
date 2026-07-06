@@ -8,34 +8,26 @@ Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。�
 
 ```
 AgentEvent (基类 @dataclass)
- ├─ ToolCallEvent          — type = "tool_call"
- ├─ ToolResultEvent        — type = "tool_result"
- ├─ AssistantMessageEvent           — type = "assistant_message"
- ├─ AssistantMessageCompleteEvent   — type = "assistant_message_complete"
- ├─ ReasoningEvent         — type = "reasoning"
- ├─ ReasoningCompleteEvent — type = "reasoning_complete"
- ├─ ErrorEvent             — type = "error"
- ├─ RetryEvent             — type = "retry"
- ├─ DoneEvent              — type = "done"
- ├─ ToolCallStreamingEvent — type = "tool_call_streaming"
- ├─ UsageUpdateEvent       — type = "usage_update"
- └─ UserMessageEvent       — type = "user_message"
+ ├─ ToolResultEvent              — type = "tool_result"
+ ├─ AssistantMessageEvent        — type = "assistant_message"
+ ├─ AssistantMessageCompleteEvent — type = "assistant_message_complete"
+ ├─ ErrorEvent                   — type = "error"
+ ├─ RetryEvent                   — type = "retry"
+ ├─ DoneEvent                    — type = "done"
+ └─ UserMessageEvent             — type = "user_message"
 ```
 
-每个子类字段与下表 data 字段一一对应（如 `ToolCallEvent.tool_id` 对应 `data.id`）。
+> `EventType` 枚举（`ftre-agent-core/src/ftre_agent_core/agent/event.py`）当前只含上述 7 个值。文本 / 推理 / 工具参数三类流式片段统一通过 `assistant_message` 事件携带的 `content[]` 快照对外输出（`react_runner._emit_streaming()` 始终 yield `assistant_message`，把 `text` / `thinking` / `toolCall` 三类 part 一起打包）。
+
+每个子类字段与下表 data 字段一一对应（如 `ToolResultEvent.tool_id` 对应 `data.id`）。
 
 ## 事件类型总览
 
 | type | 说明 | 何时产生 |
 |------|------|---------|
-| `assistant_message` | LLM 流式文本片段 | LLM 每输出一段文字 |
-| `assistant_message_complete` | LLM 一轮文本完成（含 `kind` 区分中间块/最终回复） | 流式收束 / 工具调用前 |
-| `reasoning` | LLM 思考文本片段 | 支持 thinking 的模型输出 reasoning |
-| `reasoning_complete` | LLM 思考文本完成 | 流式收束 / 工具调用前 |
-| `tool_call` | 工具调用 | 解析 LLM 返回的 tool_calls 后 |
-| `tool_call_streaming` | 工具调用参数流式增量 | `ToolInputDelta` 事件到达时产出 |
+| `assistant_message` | 流式 assistant 消息快照（`content[]` 累积到当前为止的完整内容，含 text / thinking / toolCall） | 每次 LLM 输出增量（text / reasoning / toolCall 参数片段） |
+| `assistant_message_complete` | LLM 一轮完整消息（含 text / thinking / toolCall，对齐 OpenAI message 格式） | 流式收束 / 工具调用前 |
 | `tool_result` | 工具执行结果 | 工具执行完成 |
-| `usage_update` | Token 用量更新 | LLM 返回 usage 信息时 |
 | `user_message` | 工具注入的 user message | Tool 返回 AgentEvent 时（LLM 可见，前端隐藏） |
 | `retry` | LLM 重试 | 遇到可重试错误时 |
 | `error` | Agent 错误 | LLM 调用失败（不可重试/重试耗尽） |
@@ -49,131 +41,103 @@ AgentEvent (基类 @dataclass)
 
 ### assistant_message
 
-LLM 流式输出的**增量文本片段**（assistant role）。
+LLM 流式输出的**增量快照**（assistant role），每次携带到当前为止的完整 `content[]`。`content` 是内容块数组，混合 `text` / `thinking` / `toolCall`，与 `assistant_message_complete` 的 `content` 形状一致；前端消费时按 `partial_content` 理解即可。
 
 ```json
 {
   "type": "assistant_message",
   "event_id": "<16-hex>",
   "data": {
-    "content": "你好，我是"
+    "content": [
+      {"type": "text", "text": "我先检查当前目录。"},
+      {"type": "toolCall", "id": "call_abc123", "name": "bash", "arguments": {"command": "ls -la"}}
+    ]
   }
 }
 ```
 
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
-| `content` | string | 本轮增量文本 |
+| `content` | `list[dict]` | 当前累积的 `content[]` 快照。块类型与 `assistant_message_complete.content[]` 一致（`text` / `thinking` / `toolCall`）。**streaming 阶段的 part 不携带 `event_id`**，event_id 只在 `_build_complete_events()` 产出 `assistant_message_complete` 时统一写入 |
 
-**产生**：`ReActRunner._stream_turn()` 中 `async for event in self.llm.stream()` 的 `TextDelta` 分支。
+**产生**：`ReActRunner._stream_turn()` 中 `async for event in self.llm.stream()` 的 `TextDelta` / `ReasoningDelta` / `ToolInputDelta` / `ToolCall` 四个分支都会把增量累积到 `partial_content`，然后通过 `_emit_streaming()` 统一产出一条 `assistant_message` 快照事件；文本 / 推理 / 工具参数三类流式片段都封装在 `assistant_message` 的 `content[]` 中。
 
 ### assistant_message_complete
 
-LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。`kind` 字段区分中间块与最终回复：
+LLM 一轮输出的**完整消息**。chunk 累积完毕后统一发出，`content` 是内容块数组，混合 text / thinking / toolCall，对齐 OpenAI Chat Completions API 的 message content 格式。`metadata` 携带 usage、kind、stopReason 等元信息。
+
+`metadata.kind` 区分中间块与最终回复：
 
 - `kind = "block"`：本轮有工具调用，文本是中间过渡（如"我先查看一下"），后续还有更多轮次
 - `kind = "final"`：本轮无工具调用，文本是 Agent 的最终回复
+
+#### 一轮有工具调用（kind="block"）
 
 ```json
 {
   "type": "assistant_message_complete",
   "event_id": "<16-hex>",
   "data": {
-    "content": "你好，我是 ftre，一个 AI 编程助手。",
-    "kind": "final"
-  }
-}
-```
-
-| data 字段 | 类型 | 说明 |
-|-----------|------|------|
-| `content` | string | 本轮完整文本 |
-| `kind` | string | `"block"`（中间块，有工具调用）或 `"final"`（最终回复）；默认 `"final"` |
-
-**产生**：流式收束时（收到 `StepFinish`）或工具调用前。`kind` 由 `ReActRunner` 根据本轮是否有 `tool_calls` 决定——有工具调用时为 `"block"`，否则为 `"final"`。**仅在 LLM 有文本输出时产出**（`full_text` 非空）；纯工具调用轮次（无文本）不会产出此事件。
-
-### reasoning
-
-支持 thinking 的模型（DeepSeek-R1、千问 QwQ 等）产出的**思考过程文本片段**。
-```json
-{
-  "type": "reasoning",
-  "event_id": "<16-hex>",
-  "data": {
-    "content": "用户想要..."
-  }
-}
-```
-
-**产生**：`ReasoningDelta` 事件。
-
-### reasoning_complete
-
-```json
-{
-  "type": "reasoning_complete",
-  "event_id": "<16-hex>",
-  "data": {
-    "content": "用户想要一个函数来计算斐波那契数列..."
-  }
-}
-```
-
-**产生**：流式收束或工具调用前，将累积的 reasoning 一次性发出。**仅在有思考内容时产出**（`full_reasoning` 非空）；无 reasoning 的轮次不会产出此事件。
-
-### tool_call
-```json
-{
-  "type": "tool_call",
-  "event_id": "<16-hex>",
-  "data": {
-    "id": "call_abc123",
-    "name": "bash",
-    "arguments": {
-      "command": "ls -la"
+    "content": [
+      {"type": "thinking", "thinking": "用户想要查看目录内容...", "event_id": "<16-hex>"},
+      {"type": "text", "text": "我先检查当前目录。", "event_id": "<16-hex>"},
+      {"type": "toolCall", "id": "call_abc123", "name": "bash", "arguments": {"command": "ls -la"}, "event_id": "<16-hex>"}
+    ],
+    "metadata": {
+      "kind": "block",
+      "usage": {"prompt_tokens": 1200, "completion_tokens": 350, "total_tokens": 1550},
+      "stopReason": "tool_calls",
+      "model": "claude-opus-4-5-20251101",
+      "responseId": "chatcmpl-636c721d"
     }
   }
 }
 ```
 
-| data 字段 | 类型 | 说明 |
-|-----------|------|------|
-| `id` | string | 工具调用唯一 ID |
-| `name` | string | 工具名称 |
-| `arguments` | object | 完整工具参数 |
-
-**产生**：`ReActRunner._stream_turn()` 阶段 5，每个工具调用发一条。工具参数 JSON 解析失败时也会产出此事件，`arguments` 为空对象 `{}`；同时产出 `tool_result(status="failed")`。如果流结束时某个工具调用缺少有效 `id` 或 `name`，底层 accumulator 会跳过该调用，因而不会产生对应的 `tool_call` / `tool_result` 事件。
-
-### tool_call_streaming
-
-LLM **逐步输出**工具调用参数时的流式增量。
+#### 一轮最终回复（kind="final"）
 
 ```json
 {
-  "type": "tool_call_streaming",
+  "type": "assistant_message_complete",
   "event_id": "<16-hex>",
   "data": {
-    "tool_calls": [
-      {
-        "id": "call_abc123",
-        "name": "bash",
-        "arguments_delta": "{\"com"
-      }
-    ]
+    "content": [
+      {"type": "text", "text": "你好，我是 ftre，一个 AI 编程助手。", "event_id": "<16-hex>"}
+    ],
+    "metadata": {
+      "kind": "final",
+      "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+      "stopReason": "stop"
+    }
   }
 }
 ```
 
-| tool_calls[] 字段 | 类型 | 说明 |
-|-------------------|------|------|
-| `index` | int | 工具调用序号（可选；当前 `react_runner` 构造事件时未包含此字段，前端不应依赖） |
-| `id` | string | 工具调用 ID。当前 `react_runner` 会把 `ToolInputDelta.id` 原样放入事件；字段通常会出现，但值可能是空字符串，消费端不应依赖首个参数增量已有有效 ID |
-| `name` | string | 工具名称。同 `id`，字段通常会出现，但值可能是空字符串，消费端应容忍无有效名称的早期增量 |
-| `arguments_delta` | string | 参数字符串增量（可选字段；当前 `react_runner` 只在有参数片段时才通过 `ToolInputDelta` 产出事件，因此实际每个 chunk 都含此字段） |
+#### content 块类型
 
-> `id` / `name` / `arguments_delta` 为 `None` 时整个字段从 JSON 中省略（不输出 `"name": null`），因此消费端应以字段是否存在来判断，而非检查值是否为 `null`。`index` 同理，当前实现未包含此字段，消费端不应假设它存在。当前 `react_runner` 会把 `ToolInputDelta.id/name` 原样放入事件；这两个字段通常会出现，但值可能是空字符串 `""`（取决于上游 delta 是否已经给出 id/name），消费端不应假设首个参数增量一定有有效 id/name。
+| type | 结构 | 说明 |
+|------|------|------|
+| `text` | `{type, text, event_id}` | 文本输出 |
+| `thinking` | `{type, thinking, event_id}` | 推理/思考链 |
+| `toolCall` | `{type, id, name, arguments, event_id}` | 工具调用 |
 
-**产生**：LLM 流式输出的 `ToolInputDelta` 事件。当前 `LLMHandler`（Chat Completions 适配器）会在流式 `delta.tool_calls` 到达时产生；`react_runner` 收到 `ToolInputDelta` 后构造 `tool_call_streaming_event` 时仅传递 `id`、`name`、`arguments_delta`，不传递 `index`。
+> 每块实际还携带 `event_id`（16 位 hex UUID），由 `ReActRunner._build_complete_events()` 在产出 `assistant_message_complete` 时统一生成（`uuid.uuid4().hex[:16]`），用于与 `assistant_message_complete.event_id` 一致的细粒度去重。前端 `applyEvent` 当前不依赖 `event_id` 做块级去重，仅文档级登记。
+
+#### metadata 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `kind` | string | `"block"`（中间块，有工具调用）或 `"final"`（最终回复）；默认 `"final"` |
+| `usage` | object \| null | Token 用量（`prompt_tokens` / `completion_tokens` / `total_tokens`） |
+| `stopReason` | string \| null | provider 返回的 `finish_reason`：`"stop"`（自然停止）/ `"tool_calls"`（触发工具调用）/ `"length"`（超过 `max_tokens` 截断）/ `"content_filter"`（被内容过滤）等 |
+| `model` | string \| null | provider 响应中的模型 ID（来自 OpenAI 响应的 `model` 字段） |
+| `responseId` | string \| null | provider 响应 ID（来自 OpenAI 响应的 `id` 字段，如 `chatcmpl-...`） |
+
+> `_build_complete_events()` 当前仅在 `kind` / `usage` / `stopReason` / `responseId` / `model` 五项存在时写入对应字段；旧的 `provider` / `error` 字段不写入。`stopReason` 的可能值与具体 provider 的 `finish_reason` 枚举一致（OpenAI Chat Completions 通常为 `"stop"` / `"tool_calls"` / `"length"` / `"content_filter"`），并未统一为 `toolUse` / `error`。
+
+**产生**：`ReActRunner._build_complete_events()` 在流式收束时（收到 `StepFinish`）组装。将本轮累积的 `reasoning_parts`、`text_parts`、`tool_calls`、`usage`、`finish_reason` 合并为单个事件。**仅在 `content` 非空时产出**；纯空轮次（无文本、无思考、无工具调用）不会产出此事件。
+
+> 旧的 `usage_update`、`reasoning_complete`、`tool_call` 三个独立事件已被合并到此事件的 `metadata` 和 `content[]` 中，不再单独产出。
 
 ### tool_result
 
@@ -196,7 +160,7 @@ LLM **逐步输出**工具调用参数时的流式增量。
 
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
-| `id` | string | 关联的 tool_call ID |
+| `id` | string | 关联的 toolCall ID（来自 `assistant_message_complete.content[].toolCall.id`） |
 | `name` | string | 工具名称 |
 | `result` | string | 执行结果 |
 | `error` | string \| null | null 表示成功 |
@@ -206,32 +170,12 @@ LLM **逐步输出**工具调用参数时的流式增量。
 
 ### tool_cancel_requested / tool_cancelled
 
-这两个事件类型当前**不在任何代码路径中**——既不在 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 的 `EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:414-423`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
+这两个事件类型当前**不在任何代码路径中**——既不在 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 的 `EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES` 白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们：
 
 - 取消最终通过 `done(success=false, reason="cancelled")` 表达；如果工具任务被取消/中断，可能额外产出 `tool_result(status="cancelled")`，但不应依赖每次取消都有 cancelled 状态的 `tool_result`。
 - 当前没有统一的 `tool_timed_out` 事件；工具超时通常由具体工具返回失败结果或错误文本。
 
 因此客户端不应依赖这些事件作为取消/超时的实时信号。
-
-### usage_update
-
-LLM 返回的 **Token 用量**。
-
-```json
-{
-  "type": "usage_update",
-  "event_id": "<16-hex>",
-  "data": {
-    "usage": {
-      "prompt_tokens": 1200,
-      "completion_tokens": 350,
-      "total_tokens": 1550
-    }
-  }
-}
-```
-
-**产生**：`StepFinish.usage` 不为空时。底层适配器在 OpenAI 流结束后会先 finalize 出完整 `ToolCall*` 内部事件，再产出 `StepFinish`；`react_runner` 收到 `ToolCall` 时会先记录并启动工具任务，收到随后的 `StepFinish` 后如果 `usage` 不为空则发出 `usage_update`。由于 `StepFinish` 仍在 `_stream_turn()` 的流循环内处理，而 `assistant_message_complete` 在流循环结束后才产出，因此对外 `usage_update` 始终出现在 `assistant_message_complete` 之前。
 
 ### retry
 
@@ -255,19 +199,21 @@ LLM 调用遇到**可重试错误**（网络/超时/限流等），准备重试�
 | `code` | string | 错误码 |
 | `message` | string | 错误描述 |
 | `attempt` | int | 当前重试次数（从 1 开始） |
-| `max_attempts` | int | 最大重试次数（不含首次尝试） |
+| `max_attempts` | int | 最大重试次数 |
+
+**产生**：`react_runner` 捕获到可重试异常时产出，在 `error` 之前。如果重试耗尽，最后产出 `error` 事件。
 
 ### error
 
-LLM 调用**不可重试**或重试耗尽后的错误。
+LLM 调用失败且**不可重试**或重试耗尽。
 
 ```json
 {
   "type": "error",
   "event_id": "<16-hex>",
   "data": {
-    "message": "认证失败",
-    "code": "auth_error"
+    "message": "API 余额不足",
+    "code": "bad_request"
   }
 }
 ```
@@ -275,25 +221,13 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
 | `message` | string | 错误描述 |
-| `code` | string | 错误码 |
+| `code` | string | 错误码（`auth_error` / `bad_request` / `rate_limit` / `timeout` / `api_error` / `unknown`） |
 
-常见错误码：
-
-| code | 说明 | 是否可重试 |
-|------|------|:---:|
-| `network` | 网络连接失败 | ✅ |
-| `timeout` | 请求超时 | ✅ |
-| `rate_limit` | 频率限制 | ✅ |
-| `internal_server_error` | 服务端内部错误 | ✅ |
-| `api_error` | API 通用错误 | ✅ |
-| `unknown` | 未知错误 | ✅ |
-| `auth_error` | 认证失败 | ❌ |
-| `bad_request` | 请求无效 | ❌ |
-| `content_filter` | 内容审核未通过 | ❌ |
+**产生**：`react_runner` 捕获到不可重试异常或重试耗尽时产出。`error` 事件之后会产出 `done(success=false, reason="error")`。
 
 ### done
 
-**执行结束**。对已经进入 `ReActAgent.run()` / `ReActRunner` 的一次运行，正常完成、失败、取消或超迭代时都会产出此事件；`AgentLoop` 在入参为空、session 不存在、channel 不匹配等早退路径不会发布 `done`。取消时 `ReActRunner._loop()` 捕获 `CancelledError` 产出 `done(success=false, reason="cancelled")`；如果 `task.cancel()` 在 `AgentLoop._run_async()` 中直接触发 `CancelledError`，`AgentLoop` 也会补发同样的 outbound `done` 事件，但这条补发事件不走 `_PERSISTENT_CLASSES` 入库路径。
+执行结束。
 
 ```json
 {
@@ -308,9 +242,32 @@ LLM 调用**不可重试**或重试耗尽后的错误。
 
 | data 字段 | 类型 | 说明 |
 |-----------|------|------|
-| `success` | bool | 是否成功 |
+| `success` | boolean | 是否成功完成 |
 | `reason` | string | `"completed"` / `"max_iterations"` / `"error"` / `"cancelled"` |
-| `usage` | object | 总 Token 用量（可选；当前运行时不填充此字段，token 用量通过 `usage_update` 事件获取） |
+
+> Token 用量不再通过 `done` 事件传递，而是在 `assistant_message_complete.metadata.usage` 中。
+
+### user_message
+
+工具返回 `AgentEvent`（非 `str`）时，`react_runner` 在所有 `tool_result` 之后统一注入此事件到 memory。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
+
+典型场景：`read` 工具在读取图片时返回 `UserMessageEvent(content=[image_file])`，Agent 无需等待用户即可识别图片内容。图片数据落盘到 `~/.ftre/assets/images/`，事件中只携带文件路径；`to_openai_message()` 在写入 memory 时自动将 `image_file` 转为 `image_url`（读文件转 base64 data URL）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | `str \| list[dict]` | OpenAI 格式 user message content；图片为 `{"type": "image_file", "path": "<abs_path>", "mime_type": "<mime>"}` |
+| `metadata` | `dict` | 默认 `{"hide": True}`，前端由此跳过渲染 |
+
+```json
+{
+  "type": "user_message",
+  "event_id": "<16-hex>",
+  "data": {
+    "content": [{"type": "image_file", "path": "C:/Users/.../.ftre/assets/images/screenshot.png", "mime_type": "image/png"}],
+    "metadata": {"hide": true}
+  }
+}
+```
 
 ---
 
@@ -323,25 +280,54 @@ _user_message 到达 AgentLoop_
   │   │
   │   ├─ _stream_turn() 第 1 轮（有工具调用）
   │   │   ├─ LLM stream
-  │   │   │   ├─ reasoning             (chunk 1，如有)
-  │   │   │   ├─ assistant_message          (chunk，如有文本输出)
-  │   │   │   └─ tool_call_streaming   (arg chunks)
-  │   │   ├─ usage_update              (StepFinish.usage，如有)
-  │   │   ├─ reasoning_complete          (如有思考内容)
-   │   │   ├─ assistant_message_complete     (如有文本, kind=block)
-   │   │   ├─ tool_call × N → tool_result × N   (先全部 call，再全部 result)
-   │   │
-   │   ├─ _stream_turn() 第 2 轮（直接回复）
-   │   │   ├─ LLM stream
-   │   │   │   ├─ assistant_message          (chunk 1)
-   │   │   │   └─ assistant_message          (chunk 2)
-   │   │   ├─ usage_update              (StepFinish.usage，如有)
-   │   │   ├─ assistant_message_complete           (kind=final)
+  │   │   │   ├─ assistant_message  (chunk 1，content 累积到当前快照，含 text/thinking/toolCall parts)
+  │   │   │   ├─ assistant_message  (chunk 2 ...)
+  │   │   │   └─ ...
+  │   │   ├─ assistant_message_complete     (content=[thinking, text, toolCall], metadata={kind:"block", usage, stopReason:"tool_calls"})
+  │   │   └─ tool_result × N                (逐条产出)
+  │   │
+  │   ├─ _stream_turn() 第 2 轮（直接回复）
+  │   │   ├─ LLM stream
+  │   │   │   ├─ assistant_message  (chunk 1)
+  │   │   │   └─ assistant_message  (chunk 2)
+  │   │   ├─ assistant_message_complete     (content=[text], metadata={kind:"final", usage, stopReason:"stop"})
   │   │   └─ done (success=true, reason="completed")
   │   │
   │   └─ _loop() 结束
   │
   └─ _active_agents.pop()
+```
+
+> 流式阶段所有 LLM 增量（text / reasoning / 工具参数片段）都通过 `assistant_message` 事件携带的 `content[]` 快照对外发出，块结构与 `assistant_message_complete.content[]` 一致。
+
+### 多轮 ReAct 示例
+
+3 轮工具调用 + 1 轮最终回复：
+
+```
+第 1 轮 LLM:
+  [流式 chunk: assistant_message × N（content[] 累积 text / thinking / toolCall parts）]
+  assistant_message_complete  ← content=[thinking, text, toolCall(bash curl)]
+                                metadata={usage:{total:3605}, kind:"block", stopReason:"tool_calls"}
+  tool_result                 ← id=tool-670d, result="..."
+
+第 2 轮 LLM:
+  [流式 chunk: assistant_message × N（content[] 累积 toolCall parts）]
+  assistant_message_complete  ← content=[toolCall(bash pwsh)]
+                                metadata={usage:{total:3877}, kind:"block", stopReason:"tool_calls"}
+  tool_result                 ← id=tool-3f0d, result="pwsh 不是..."
+
+第 3 轮 LLM:
+  [流式 chunk: assistant_message × N（content[] 累积 text / toolCall parts）]
+  assistant_message_complete  ← content=[text:"已获取到余额...", toolCall(send_message)]
+                                metadata={usage:{total:3982}, kind:"block", stopReason:"tool_calls"}
+  tool_result                 ← id=call_7940, result="已通知..."
+
+第 4 轮 LLM:
+  [流式 chunk: assistant_message × N（content[] 累积 text parts）]
+  assistant_message_complete  ← content=[text:"已完成：查询到余额 $1323.93..."]
+                                metadata={usage:{total:4037}, kind:"final", stopReason:"stop"}
+  done                        ← success=true reason=completed
 ```
 
 ## Agent 的退出路径
@@ -361,32 +347,30 @@ _user_message 到达 AgentLoop_
 
 ### LLM 流式事件类型（概念模型）
 
-以下类型是 `ftre-agent-core` 的 `LLMHandler` 在流式输出过程中产出的内部事件，不直接作为 Agent 事件发出，但影响最终事件的生成：
+以下类型是 `ftre-agent-core` 的 `LLMHandler` 在流式输出过程中产出的**内部 LLM 事件**，不直接作为 Agent 事件发出，但会驱动 `assistant_message` 快照事件的生成：
 
-| 实际类型 | 字段 | 对应产出事件 |
-|---------|------|-------------|
-| `TextDelta` | `text: str` | → 产出一条 `assistant_message` 事件 |
-| `ReasoningDelta` | `text: str` | → 产出一条 `reasoning` 事件 |
-| `ToolInputDelta` | `id`, `name`, `text` | → 产出一条 `tool_call_streaming` 事件 |
-| `ToolCall` | `id`, `name`, `input` | → 内部先记录并启动工具任务；对外事件在流循环结束、完整文本事件之后产出 |
-| `StepFinish` | `finish_reason`, `usage` | → 产出一条 `usage_update` 事件（usage 不为空时） |
-
-每个事件是独立对象，不存在"同一对象同时包含多个字段"的情况。当前 Chat Completions 适配器在 provider 流结束后产出的内部顺序是：先 `ToolCall*`，再 `StepFinish`。因此工具任务可能已经在对外 `usage_update` / `assistant_message_complete` 之前启动，但 `tool_call` / `tool_result` 这两个 Agent 事件仍会等到完整文本事件之后再统一产出。
+| 实际类型 | 字段 | 对应产出 |
+|---------|------|---------|
+| `TextDelta` | `text: str` | → 累积到 `partial_content` 的 `text` 块；产出一条 `assistant_message` 快照 |
+| `ReasoningDelta` | `text: str` | → 累积到 `partial_content` 的 `thinking` 块；产出一条 `assistant_message` 快照 |
+| `ToolInputDelta` | `id`, `name`, `text` | → 累积到 `partial_content` 中对应 `toolCall` 块的 `arguments` 字段（早期是 JSON 字符串片段）；产出一条 `assistant_message` 快照 |
+| `ToolCall` | `id`, `name`, `input` | → 内部先记录并启动工具任务；同步把 `partial_content` 中对应 `toolCall` 块的 `arguments` 替换为完整 dict；产出一条 `assistant_message` 快照 |
+| `StepFinish` | `finish_reason`, `usage`, `response_metadata` | → 缓存到局部变量（`finish_reason` / `usage` / `response_metadata`），**不再单独产出 `usage_update` 事件**；在 `_build_complete_events()` 中把 `usage` 嵌入 `assistant_message_complete.metadata.usage`，把 `response_metadata.{id, model}` 嵌入 `metadata.{responseId, model}` |
 
 ### 流式收束后的产出顺序
 
 `_stream_turn()` 的产出分两个阶段：
 
-1. **流循环内（Phase 1）**：收到 `StepFinish` 时，若 `usage` 不为空则产出 `usage_update`（在流循环内处理，始终出现在 `assistant_message_complete` 之前）
-2. **流循环结束后（Phase 2）**：按顺序产出 `reasoning_complete`（仅在有思考内容时）→ `assistant_message_complete`（仅在有文本时）→ 所有 `tool_call`（逐条产出）→ 所有 `tool_result`（逐条产出，与 tool_call 不交替）→ `UserMessageEvent`（如有）
+1. **流循环内（Phase 1）**：收到 `TextDelta` / `ReasoningDelta` / `ToolInputDelta` / `ToolCall` 时把对应增量累积到 `partial_content`，然后通过 `_emit_streaming()` 统一产出一条 `assistant_message` 快照事件（`content[]` 携带到当前为止的完整内容）。收到 `StepFinish` 时缓存 `usage` / `finish_reason` / `response_metadata` 到局部变量。
+2. **流循环结束后（Phase 2）**：调用 `_build_complete_events()` 将累积的 reasoning + text + toolCall + usage + stopReason 合并为**单个** `assistant_message_complete` 事件。然后产出所有 `tool_result`（逐条产出）→ `UserMessageEvent`（如有）。
 
 ## 事件转 OpenAI messages
 
-后端在构造下一轮 LLM 输入时，会通过 `SessionManager.to_openai_messages()` 把持久化 Agent 事件重建为 OpenAI Chat Completions 兼容的 `messages`。重建时不会直接一条事件对应一条 message，而是按事件顺序合并同一轮 assistant 的 reasoning、可见文本和 tool calls。
+后端在构造下一轮 LLM 输入时，会通过 `SessionManager.to_openai_messages()` 把持久化的 `assistant_message_complete` 消息转为 OpenAI Chat Completions 兼容的 `messages`。新格式直读 `content[]`（text / thinking / toolCall），不再需要 pending_* 缓冲逻辑。
 
-### 普通回答：`reasoning_complete → assistant_message_complete`
+### 普通回答
 
-没有工具调用时，reasoning 写入 `reasoning_content`，模型正文写入 `content`（text parts 列表）。`format_assistant_message()` 始终输出 `reasoning_content` 字段——有思考内容时为思考文本，无思考时为空字符串。
+`content[]` 中的 text 块写入 `content`，thinking 块写入 `reasoning_content`。
 
 ```json
 [
@@ -400,38 +384,9 @@ _user_message 到达 AgentLoop_
 ]
 ```
 
-### 直接工具调用：`reasoning_complete → tool_call → tool_result`
+### 工具调用
 
-如果模型没有输出可见文本就直接调用工具，assistant message 保留真实 `reasoning_content`，`content` 规范为空字符串。工具结果仍然单独转成 `role="tool"`。
-
-```json
-[
-  {
-    "role": "assistant",
-    "content": "",
-    "reasoning_content": "需要调用 bash 查看目录",
-    "tool_calls": [
-      {
-        "id": "c1",
-        "type": "function",
-        "function": {
-          "name": "bash",
-          "arguments": "{\"command\": \"pwd\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "c1",
-    "content": "E:\\ftre"
-  }
-]
-```
-
-### 先输出可见文本再工具调用：`reasoning_complete → assistant_message_complete → tool_call → tool_result`
-
-如果同一轮模型先输出可见文本，再发起工具调用，`assistant_message_complete` 不会立即落成一条普通 assistant message，而是先暂存；随后出现的 `tool_call` 会把它合并进同一条 assistant message。此时可见文本放在 `content`，真实 reasoning 保留在 `reasoning_content`。
+`content[]` 中的 text 块写入 `content`，thinking 块写入 `reasoning_content`，toolCall 块转为 `tool_calls`。`tool_result` 消息单独转为 `role="tool"`。
 
 ```json
 [
@@ -460,7 +415,7 @@ _user_message 到达 AgentLoop_
 ]
 ```
 
-### 只有可见文本：`assistant_message_complete`
+### 只有可见文本
 
 如果没有 reasoning，也没有 tool call，则生成普通 assistant message。`content` 为 text parts 列表，`reasoning_content` 固定为空字符串（`format_assistant_message()` 始终输出此字段）。
 
@@ -478,64 +433,4 @@ _user_message 到达 AgentLoop_
 
 ### 工具参数解析失败
 
-当 LLM 返回的 `tool_call.function.arguments` JSON 解析失败，但该工具调用仍有有效 `id` 和 `name` 时，仍然会产出 `tool_call` 事件（`arguments` 为空对象 `{}`），同时产出 `tool_result(status="failed")`。`name` 保留模型返回的原始 `tool_call.function.name`。如果缺少有效 `id` 或 `name`，该工具调用会在 accumulator finalize 阶段被跳过，不会进入后续工具执行阶段。
-
-```json
-{
-  "type": "tool_call",
-  "data": {
-    "id": "call_abc123",
-    "name": "bash",
-    "arguments": {}
-  }
-}
-```
-
-```json
-{
-  "type": "tool_result",
-  "data": {
-    "id": "call_abc123",
-    "name": "bash",
-    "result": "[PARSE_ERROR] Tool call arguments were malformed JSON.",
-    "error": "malformed JSON arguments",
-    "status": "failed",
-    "error_code": null
-  }
-}
-```
-
-### user_message
-
-工具返回 `AgentEvent`（非 `str`）时，`react_runner` 在所有 `tool_result` 之后统一注入此事件到 memory。LLM 下一轮可"看到"事件内容，前端跳过渲染（`metadata.hide=true`）。
-
-典型场景：`read` 工具在读取图片时返回 `UserMessageEvent(content=[image_file])`，Agent 无需等待用户即可识别图片内容。图片数据落盘到 `~/.ftre/assets/images/`，事件中只携带文件路径；`to_openai_message()` 在写入 memory 时自动将 `image_file` 转为 `image_url`（读文件转 base64 data URL）。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `content` | `str \| list[dict]` | OpenAI 格式 user message content；图片为 `{"type": "image_file", "path": "<abs_path>", "mime_type": "<mime>"}` |
-| `metadata` | `dict` | 默认 `{"hide": True}`，前端由此跳过渲染 |
-
-```json
-{
-  "type": "user_message",
-  "event_id": "<16-hex>",
-  "data": {
-    "content": [{"type": "image_file", "path": "C:/Users/.../.ftre/assets/images/screenshot.png", "mime_type": "image/png"}],
-    "metadata": {"hide": true}
-  }
-}
-```
-
-## 校对记录
-
-- **2025-06-26**：与 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 完整核对，事件模型描述准确。
-  - 12 个事件类型（`tool_call` / `tool_result` / `assistant_message` / `assistant_message_complete` / `reasoning` / `reasoning_complete` / `error` / `retry` / `done` / `tool_call_streaming` / `usage_update` / `user_message`）与 `EventType` 枚举完全一致；
-  - 各 `@dataclass` 子类字段（如 `ToolCallEvent.tool_id` → `data.id`）与 `_data_dict()` 序列化映射一致；
-  - `DoneReason` 枚举（`completed` / `max_iterations` / `error` / `cancelled`）与代码一致；
-  - `tool_result.status` 实际取值（`completed` / `failed` / `cancelled`）与 `tool_handler.py` 中 `status=` 调用一致；
-  - `tool_call_streaming` 仅含 `id` / `name` / `arguments_delta`（无 `index`）与 `react_runner.py:471-477` 中 `tool_call_streaming_event([{...}])` 构造一致；
-  - `usage_update` 在流循环内产出（`react_runner.py:495`），`assistant_message_complete` 在流循环后产出，因此 `usage_update` 始终早于 `assistant_message_complete`；
-  - `react_runner` 两阶段写入（先所有 `tool_result`，再统一追加 `UserMessageEvent`）与 `react_runner.py:658-689` 一致；
-  - `format_assistant_message` 始终输出 `reasoning_content` 字段（`reasoning.py:34`），与 OpenAI messages 重构一致。
-- **2026-07-19**：行号复验。`AgentLoop._PERSISTENT_CLASSES` 当前位于 `loop.py:414-423`（原记录标注 `396-405`）。`EventType` 枚举与 dataclass 子类（12 个含 `UserMessageEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent`）当前位于 `event.py:16-28`、`event.py:100-293`，与正文描述一致。`tool_call_streaming_event([{"id": event.id, "name": event.name, "arguments_delta": event.text}])` 构造当前在 `react_runner.py:471-477`；`usage_update_event(event.usage)` 在 `react_runner.py:495`；`UserMessageEvent` 两阶段追加（先所有 `tool_result`，再统一追加 `UserMessageEvent`）在 `react_runner.py:658-689`。正文所有关键事实与源码一致，无需修订。
+当 LLM 返回的 `tool_call.function.arguments` JSON 解析失败，但该工具调用仍有有效 `id` 和 `name` 时，仍然会嵌入 `assistant_message_complete.content[]` 的 toolCall 块（`arguments` 为空对象 `{}`），同时产出 `tool_result(status="failed")`。`name` 保留模型返回的原始 `tool_call.function.name`。如果缺少有效 `id` 或 `name`，该工具调用会在 accumulator finalize 阶段被跳过，不会进入后续工具执行阶段。

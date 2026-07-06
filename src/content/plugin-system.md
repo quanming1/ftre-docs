@@ -55,7 +55,7 @@ ftre 的插件系统允许你在不修改核心代码的前提下，扩展 Agent
 - `name` — 必须与插件的 `name` 属性匹配
 - `config` — 任意 JSON 对象，插件通过 `self.api.config` 读取
 
-注意：`plugins[]` 不是启用列表。Gateway 启动时会扫描并加载 `~/.ftre/plugins/` 下所有非 `_` 开头的 `.py` 插件；`plugins[]` 只用于给同名插件传入配置。
+注意：`plugins[]` 不是启用列表。Gateway 启动时会扫描 `~/.ftre/plugins/` 下所有非 `_` 开头的子目录（每个子目录是一个 Python package，入口固定为 `__init__.py`）；`plugins[]` 只用于给同名插件传入配置。
 
 ---
 
@@ -93,7 +93,7 @@ class MyPlugin(Plugin):
 | `command_manager` | CommandManager | 斜杠指令注册器，插件通过 `command_manager.register()` 注册指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`（`command_manager=cmd`），因此此属性运行时为 `CommandManager` 实例。`register()` 签名新增 `system: bool = False` 参数，`system=True` 注册的系统级指令在 `_dispatch` 的 session lock 外执行，适合需要立即响应的指令（如取消操作）；默认 `system=False` 的普通指令在 lock 内执行。注意：`/cancel` 已在 `AgentLoop._register_commands()` 中作为系统级指令注册（`system=True`），`/compact` 作为普通指令注册 |
 | `event_loop` | AbstractEventLoop \| None | 主 asyncio 事件循环引用；通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）。当前 `main.py` 在 `PluginManager` 构造时直接传入 `event_loop=lambda: event_loop`（闭包引用 `asyncio.get_running_loop()` 返回的事件循环），因此插件加载时即可通过 `FtrePluginApi.event_loop` 拿到主事件循环实例。**注意**：`AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时当前未传入 `event_loop`，因此 hook 的 `ctx.event_loop` 为 `None`；插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` |
 | `_hook_manager` | HookManager | 内部 hook 管理器，通常通过 `register_hook()` 使用 |
-| `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre_agent_core.tool.ToolRegistry`），通常通过 `self.api.tool_registry.register(tool)` 使用；注意重复注册同名**插件工具**会抛出 `ValueError`，不会静默覆盖。若插件工具与内置工具同名，插件注册阶段不会报错；构建 Agent 工具表时由 `ftre-agent-core` 的 `ToolRegistry` 按名称覆盖，后注册的插件工具会覆盖同名内置工具 |
+| `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre_agent_core.tool.ToolRegistry`），通常通过 `self.api.tool_registry.register(tool)` 使用；当前 `register()` 实现为直接覆盖（`self._tools[name] = tool`），同名工具（包括插件工具之间、与内置工具同名）都会被静默覆盖，不抛 `ValueError`。后注册的同名插件工具会覆盖先前注册的同名插件工具；插件工具与同名内置工具的覆盖发生在 Agent 构建工具表（`to_openai_tools()` / `snapshot()`）时，由全局 `ToolRegistry` 统一按工具名取最新注册 |
 
 `FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre_agent_core.tool.ToolRegistry` 实例。
 
@@ -458,7 +458,7 @@ class MyTool(Tool):
 - hook 函数抛异常会被捕获跳过，不会拖垮主流程
 - 同名插件只加载第一个，后续同名插件会被跳过
 - `Injected` 只能作为参数默认值使用（如 `x=Injected("x")`），不要写成类型注解
-- 同名插件工具之间会在 `ftre_agent_core.tool.ToolRegistry.register()` 阶段抛出 `ValueError`；但插件工具与内置工具同名时，注册阶段不会报错，构建 Agent 时会由 `ftre-agent-core` 的工具注册表按名称覆盖内置工具
+- 同名工具之间（包括插件工具与内置工具、插件工具之间）在 `ftre_agent_core.tool.ToolRegistry.register()` 阶段不会抛 `ValueError`，而是按名称直接覆盖（`self._tools[name] = tool`）。后注册的同名插件工具会覆盖先前注册的内置/插件工具；构建 Agent 工具表时由该 `ToolRegistry` 统一按工具名取最新注册
 - `FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre_agent_core.tool.ToolRegistry` 实例。插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="", system=False)`。当前运行时 `command_manager` 为 `CommandManager` 实例（`main.py` 将其传入 `PluginManager`），因此此调用可以生效。`system=True` 注册的系统级指令在 session lock 外执行，默认普通指令在 lock 内执行。内置指令（如 `/cancel` 为系统级、`/compact` 为普通级）已在 `AgentLoop._register_commands()` 中直接注册
 
 ## 校对记录
@@ -469,7 +469,7 @@ class MyTool(Tool):
    - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
     - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `agent_dir` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:52-76` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:714-722`）；
    - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py` 一致；
-   - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具；插件同名工具之间在 `ftre_agent_core.tool.ToolRegistry.register()` 阶段会抛 `ValueError`；
+   - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry.register()` 按名称覆盖内置工具（`self._tools[name] = tool`，不抛 `ValueError`）；插件同名工具之间同样按名称覆盖，后注册者覆盖先前注册者；
  - **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:95-97`（`register_router`）。
   - **2025-07-18**：重构 system prompt 注入机制，新增 `before_agent_run` 挂点。
     - 删除 `append_system_prompt()` 方法与 `appended_system_prompts` 属性；
