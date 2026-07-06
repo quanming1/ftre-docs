@@ -29,7 +29,7 @@ AgentEvent (基类 @dataclass)
 | type | 说明 | 何时产生 |
 |------|------|---------|
 | `assistant_message` | LLM 流式文本片段 | LLM 每输出一段文字 |
-| `assistant_message_complete` | LLM 一轮文本完成 | 流式收束 / 工具调用前 |
+| `assistant_message_complete` | LLM 一轮文本完成（含 `kind` 区分中间块/最终回复） | 流式收束 / 工具调用前 |
 | `reasoning` | LLM 思考文本片段 | 支持 thinking 的模型输出 reasoning |
 | `reasoning_complete` | LLM 思考文本完成 | 流式收束 / 工具调用前 |
 | `tool_call` | 工具调用 | 解析 LLM 返回的 tool_calls 后 |
@@ -69,18 +69,28 @@ LLM 流式输出的**增量文本片段**（assistant role）。
 
 ### assistant_message_complete
 
-LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。
+LLM 一轮输出的**完整文本**。chunk 累积完毕后统一发出。`kind` 字段区分中间块与最终回复：
+
+- `kind = "block"`：本轮有工具调用，文本是中间过渡（如"我先查看一下"），后续还有更多轮次
+- `kind = "final"`：本轮无工具调用，文本是 Agent 的最终回复
+
 ```json
 {
   "type": "assistant_message_complete",
   "event_id": "<16-hex>",
   "data": {
-    "content": "你好，我是 ftre，一个 AI 编程助手。"
+    "content": "你好，我是 ftre，一个 AI 编程助手。",
+    "kind": "final"
   }
 }
 ```
 
-**产生**：流式收束时（收到 `StepFinish`）或工具调用前。**仅在 LLM 有文本输出时产出**（`full_text` 非空）；纯工具调用轮次（无文本）不会产出此事件。
+| data 字段 | 类型 | 说明 |
+|-----------|------|------|
+| `content` | string | 本轮完整文本 |
+| `kind` | string | `"block"`（中间块，有工具调用）或 `"final"`（最终回复）；默认 `"final"` |
+
+**产生**：流式收束时（收到 `StepFinish`）或工具调用前。`kind` 由 `ReActRunner` 根据本轮是否有 `tool_calls` 决定——有工具调用时为 `"block"`，否则为 `"final"`。**仅在 LLM 有文本输出时产出**（`full_text` 非空）；纯工具调用轮次（无文本）不会产出此事件。
 
 ### reasoning
 
@@ -318,15 +328,15 @@ _user_message 到达 AgentLoop_
   │   │   │   └─ tool_call_streaming   (arg chunks)
   │   │   ├─ usage_update              (StepFinish.usage，如有)
   │   │   ├─ reasoning_complete          (如有思考内容)
-  │   │   ├─ assistant_message_complete     (如有文本)
-  │   │   ├─ tool_call × N → tool_result × N   (先全部 call，再全部 result)
-  │   │
-  │   ├─ _stream_turn() 第 2 轮（直接回复）
-  │   │   ├─ LLM stream
-  │   │   │   ├─ assistant_message          (chunk 1)
-  │   │   │   └─ assistant_message          (chunk 2)
-  │   │   ├─ usage_update              (StepFinish.usage，如有)
-  │   │   ├─ assistant_message_complete
+   │   │   ├─ assistant_message_complete     (如有文本, kind=block)
+   │   │   ├─ tool_call × N → tool_result × N   (先全部 call，再全部 result)
+   │   │
+   │   ├─ _stream_turn() 第 2 轮（直接回复）
+   │   │   ├─ LLM stream
+   │   │   │   ├─ assistant_message          (chunk 1)
+   │   │   │   └─ assistant_message          (chunk 2)
+   │   │   ├─ usage_update              (StepFinish.usage，如有)
+   │   │   ├─ assistant_message_complete           (kind=final)
   │   │   └─ done (success=true, reason="completed")
   │   │
   │   └─ _loop() 结束

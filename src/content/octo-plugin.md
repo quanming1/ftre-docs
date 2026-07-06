@@ -2,7 +2,7 @@
 
 Octo Channel 是 ftre 的一个外部平台 Channel 插件，连接 [Octo IM](https://im.deepminer.com.cn) 即时通讯平台，让 ftre Agent 能够作为 bot 加入群聊、接收 @ 消息并自动回复。
 
-独立仓库 `quanming1/ftre-octo-plugin`，本地路径 `~/.ftre/plugins/octo-plugin/`。
+独立仓库 `quanming1/ftre-octo-plugin`，本地路径 `~/.ftre/plugins/octo_plugin/`。
 
 ---
 
@@ -24,8 +24,7 @@ Octo IM Server (WuKongIM 二进制协议)
 │  _api.py                 │  ← 通道常量 + external_key/session_id 编解码 + OctoBotApi
 │  _mention.py             │  ← @ 检测门控（含广播抑制）+ 成员缓存
 │  _tools.py               │  ← octo_management Tool
-│  _plugin.py              │  ← OctoChannelPlugin: 入口 + Hook + 安全策略
-│  octo_channel.py         │  ← 公开门面 re-export
+│  _plugin.py              │  ← OctoChannelPlugin: 入口 + Hook + 私有工具注册
 └──────────┬───────────────┘
            │
            ▼
@@ -85,7 +84,7 @@ PluginManager 将子目录加入 `sys.path`，然后 `importlib.import_module(�
 
 ### 历史消息注入
 
-每次被 @ 时，插件通过 `POST /v1/bot/messages/sync` 拉取最近消息，**不做内存缓存**（重启后首句 @ 即可看到历史）。
+每次被 @（群聊）或收到私聊消息时，插件通过 `POST /v1/bot/messages/sync` 拉取最近消息，**不做内存缓存**（重启后首句 @ 即可看到历史）。群聊和私聊都会拉取历史，补偿 agent 离线期间丢失的消息。
 
 拉取后会先过滤：去掉 bot 自己的消息、当前触发消息、非文本消息、空内容消息。然后按 `_last_reply_seq` 分段：
 
@@ -100,6 +99,8 @@ PluginManager 将子目录加入 `sys.path`，然后 `importlib.import_module(�
   ← 触发本次响应的那条消息
 ```
 
+历史上下文使用 XML 标签包裹后拼接到用户消息 `content` 前缀，随消息持久化到 session DB。下一轮对话时 agent 从 DB 中读取历史上下文，无需插件临时注入。
+
 ### 会话标识与持久映射
 
 插件使用 ftre 的 `SessionManager.get_or_create_external_session()` 将 Octo 会话绑定到 ftre 内部 session，实现不同群聊/私聊的对话上下文持久隔离。
@@ -110,18 +111,12 @@ PluginManager 将子目录加入 `sys.path`，然后 `importlib.import_module(�
 
 映射在 `external_sessions` 表中持久化，重启后也生效。详见文档「架构设计」中 Session Manager 的 `external_sessions` 部分。
 
-### 双轨上下文注入（对齐 OpenClaw）
+### 上下文注入
 
 上下文分两轨注入，对齐原始项目 `openclaw-channel-octo` 的 `prependContext` / `prependSystemContext`：
 
-- **System Prompt 轨**：bot 身份信息（`<OCTO_IDENTITY>`），**PREPEND** 到已有 system 消息前
-- **User 上下文轨**：成员列表 + 历史消息（`<OCTO_CONTEXT>`）+ 安全策略（`<OCTO_SAFETY>`），拼接到最后一条 user 消息前
-
-注入点显式管理分隔符（`\n\n`），数据本身不带尾部换行。实现对齐 OpenClaw SDK：
-
-```
-preparedPrompt = prependContext + "\n\n" + preparedPrompt
-```
+- **System Prompt 轨**：bot 身份信息（`<OCTO_IDENTITY>`），在 `BEFORE_AGENT_RUN` hook 中 PREPEND 到已有 system 消息前
+- **User 上下文轨**：群成员列表 + 历史消息 + 当前消息，在 `_handle_message` 中用 XML 标签包裹后拼接到 `content`，随用户消息持久化到 session DB
 
 ### XML 标签包裹
 
@@ -129,13 +124,16 @@ preparedPrompt = prependContext + "\n\n" + preparedPrompt
 
 | 标签 | 注入位置 | 内容 |
 |------|---------|------|
-| `<OCTO_IDENTITY>` | System prompt | bot 名称、ID、所在平台 |
-| `<OCTO_CONTEXT>` | User 消息前缀 | 群成员列表 + 历史消息分段 |
-| `<OCTO_SAFETY>` | User 消息前缀 | 安全策略（当前临时 hardcode） |
+| `<OCTO_IDENTITY>` | System prompt（hook 注入） | bot 名称、ID、所在平台 |
+| `<OCTO_MEMBER_LIST>` | User 消息 content 前缀 | 群成员列表（仅群聊，用于 @ 人时查找 uid） |
+| `<OCTO_HISTORY>` | User 消息 content 前缀 | 从 API 拉取的频道历史消息，按上次回复分段标注 |
+| `<OCTO_CURRENT_MESSAGE>` | User 消息 content 前缀 | 当前需要回复的消息（发送者标签 + 原文） |
 
-### Agent 管理工具
+> 私聊无群成员列表，`<OCTO_MEMBER_LIST>` 标签省略；私聊发送者名称通过 `GET /v1/bot/user/info` API 获取。
 
-`octo_management` Tool 注册到 ftre 的 `tool_registry`，Agent 可主动调用：
+### Agent 管理工具（per-agent 私有）
+
+`octo_management` Tool 在 `BEFORE_AGENT_RUN` hook 中通过 `ctx.agent_tool_registry.register()` 注册为当前 agent 的私有工具，仅对 channel_id 为 `octo` 的 agent 生效。Agent 可主动调用：
 
 | 操作 | API | 用途 |
 |------|-----|------|
@@ -146,13 +144,17 @@ preparedPrompt = prependContext + "\n\n" + preparedPrompt
 
 ### 消息发送行为
 
-- 只发送完整回复（`assistant_message_complete` 事件），不逐 token 流式输出到 Octo，避免大量碎片消息
-- 空内容不发送（`if not content: return`）
+Channel 的 `send()` 方法只处理 `assistant_message_complete` 和 `done` 事件，不逐 token 流式输出到 Octo，避免大量碎片消息。基于 `assistant_message_complete` 事件的 `kind` 字段实现缓冲策略：
+
+- `kind = "block"`（中间块，有工具调用）：缓冲到内存，**不立即发送**——避免提前发送"我先查看一下"之类的过渡文本
+- `kind = "final"`（最终回复）：立即发送，清空缓冲
+- `done` 事件：如果存在未发送的缓冲且本轮未发送过 final，则补发缓冲内容（防止 agent 异常终止时丢失回复）
+
+发送时自动解析回复文本中的 @mention 格式：`@[uid:name]` → `@name` + 提取 uid 列表传入 `mention_uids` 参数，Octo 服务端据此触发被 @ 用户的通知。
+
+其他细节：
+- 空内容不发送
 - 每条 `sendMessage` 请求附带 `client_msg_no`（UUID v4），WuKongIM 服务端据此去重，防止网络重试导致重复消息
-
-### 安全策略
-
-当前安全策略为**临时实现**，hardcode 在 `_plugin.py` 的 `_on_agent_run()` 中：只响应特定用户（owner）的消息，非白名单发送者优雅拒绝回复。这不是通用 ACL 配置系统，后续计划迁移到可配置策略。
 
 ---
 
@@ -245,6 +247,10 @@ Python 不直接处理 WuKongIM 二进制协议。Node.js 桥接（`octo-bridge.
 - `Buffer → UTF-8 → base64 decode → AES decrypt` 解密 RECV 包
 - 解密后通过本地 JSON WebSocket（默认 `ws://127.0.0.1:9876`）转发给 Python
 
+#### 心跳消息过滤
+
+WuKongIM 服务端会定期发送心跳消息（`type=99`、`from_uid` 为空、`message_seq=0`）。这些消息不是用户消息，不需要转发给 Python 处理。桥接层在解密后判断 `payloadObj.type === 99 && !fromUID`，直接 return——不转发、不记日志，但 RECVACK 照常发送给服务端以确认接收。
+
 ### external_key 和 session_id 编解码
 
 - `external_key`（API 调用/映射用）：`octo:{channel_type}:{channel_id}:{bot_id}`，私聊时 `channel_id` 为空则用 `from_uid`
@@ -262,14 +268,14 @@ Python 不直接处理 WuKongIM 二进制协议。Node.js 桥接（`octo-bridge.
 
 ```powershell
 cd E:\ftre
-$env:PYTHONPATH = "$env:USERPROFILE\.ftre\plugins\octo-plugin"
+$env:PYTHONPATH = "$env:USERPROFILE\.ftre\plugins\octo_plugin"
 python -m pytest tests\test_octo_channel.py -v
 ```
 
 ## 代码检查
 
 ```powershell
-cd $env:USERPROFILE\.ftre\plugins\octo-plugin
+cd $env:USERPROFILE\.ftre\plugins\octo_plugin
 mypy --strict --ignore-missing-imports .
 ruff check .
 bandit -r . -ll

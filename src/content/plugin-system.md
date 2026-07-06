@@ -93,9 +93,9 @@ class MyPlugin(Plugin):
 | `command_manager` | CommandManager | 斜杠指令注册器，插件通过 `command_manager.register()` 注册指令。当前 `main.py` 已将 `CommandManager` 实例传入 `PluginManager`（`command_manager=cmd`），因此此属性运行时为 `CommandManager` 实例。`register()` 签名新增 `system: bool = False` 参数，`system=True` 注册的系统级指令在 `_dispatch` 的 session lock 外执行，适合需要立即响应的指令（如取消操作）；默认 `system=False` 的普通指令在 lock 内执行。注意：`/cancel` 已在 `AgentLoop._register_commands()` 中作为系统级指令注册（`system=True`），`/compact` 作为普通指令注册 |
 | `event_loop` | AbstractEventLoop \| None | 主 asyncio 事件循环引用；通过 `@property` 动态解析（内部存储为 `_event_loop: Callable | None`，若可调用则惰性求值，否则直接返回）。当前 `main.py` 在 `PluginManager` 构造时直接传入 `event_loop=lambda: event_loop`（闭包引用 `asyncio.get_running_loop()` 返回的事件循环），因此插件加载时即可通过 `FtrePluginApi.event_loop` 拿到主事件循环实例。**注意**：`AgentLoop._build_messages()` 构造 `MessagesBuildContext` 时当前未传入 `event_loop`，因此 hook 的 `ctx.event_loop` 为 `None`；插件如需在 hook 中使用事件循环，应使用 `self.api.event_loop` |
 | `_hook_manager` | HookManager | 内部 hook 管理器，通常通过 `register_hook()` 使用 |
-| `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre.tools.ToolRegistry`），通常通过 `self.api.tool_registry.register(tool)` 使用；注意重复注册同名**插件工具**会抛出 `ValueError`，不会静默覆盖。若插件工具与内置工具同名，插件注册阶段不会报错；构建 Agent 工具表时由 `ftre-agent-core` 的 `ToolRegistry` 按名称覆盖，后注册的插件工具会覆盖同名内置工具 |
+| `_tool_registry` | ToolRegistry | 内部工具注册表（`ftre_agent_core.tool.ToolRegistry`），通常通过 `self.api.tool_registry.register(tool)` 使用；注意重复注册同名**插件工具**会抛出 `ValueError`，不会静默覆盖。若插件工具与内置工具同名，插件注册阶段不会报错；构建 Agent 工具表时由 `ftre-agent-core` 的 `ToolRegistry` 按名称覆盖，后注册的插件工具会覆盖同名内置工具 |
 
-`FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre.tools.ToolRegistry` 实例。
+`FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre_agent_core.tool.ToolRegistry` 实例。
 
 ### register_router(router)
 
@@ -271,6 +271,7 @@ def my_hook(ctx):
 | `messages` | list[dict] | OpenAI 格式消息列表（可增删改） |
 | `config` | AgentConfig | 配置深拷贝（可读，[完整字段见下文](#agentconfig-字段说明)） |
 | `agent_profile` | `AgentProfile \| None` | 当前 agent 的完整运行时配置（只读）。含 `agent_id` / `name` / `tools_config` / `mcp_config` / `soul_prompt` / `agents_md` / `user_prompt_md` / `agent_dir` 等字段；`None` 表示未加载到 agent 配置（仅 default 无目录时） |
+| `agent_tool_registry` | `ToolRegistry \| None` | 当前 agent 的私有工具注册表。插件可在 `before_agent_run` hook 中通过 `ctx.agent_tool_registry.register(tool)` 注册仅对当前 agent 生效的私有工具，不影响其他 agent。`None` 表示未提供（仅 default 无 agent 配置时） |
 
 **使用示例：**
 
@@ -290,8 +291,18 @@ def my_hook(ctx):
             msg["content"] += "\n\n## MCP 工具\n你可以通过 MCP 调用外部工具。"
             break
 
+    # 注册 per-agent 私有工具
+    if ctx.agent_tool_registry is not None:
+        ctx.agent_tool_registry.register(my_tool)
+
     return ctx
 ```
+
+#### per-agent 私有工具
+
+`ctx.agent_tool_registry` 是一个独立的 `ToolRegistry` 实例，仅对当前 agent 生效。通过 `before_agent_run` hook 注册的工具会合并到该 agent 的工具集中，其他 agent 不会看到这些工具。典型场景：Channel 插件为不同 agent 注册不同的平台管理工具（如 octo-plugin 按 `agent_id` 匹配 bot，注册对应的 `octo_management` 工具）。
+
+与之相对，`self.api.tool_registry` 是**全局**工具注册表，注册到其中的工具对所有 agent 可见。
 
 **与 `before_messages_build` 的区别：**
 
@@ -427,7 +438,7 @@ class MyTool(Tool):
 
 ### Injected 依赖注入
 
-标记为 `Injected` 的参数不暴露给 LLM，由框架自动注入。当前注入解析发生在 `ToolRegistry.execute(..., runtime_context=...)` 路径，因此主运行链路中仅同步工具会自动注入；异步工具在 `ToolHandler.run_one()` 中直接 `await tool._get_callable()(**ctx.arguments)`，不会自动解析 `Injected`：
+标记为 `Injected` 的参数不暴露给 LLM，由框架自动注入。同步工具通过 `ToolRegistry.execute(..., runtime_context=...)` 路径解析；异步工具在 `ToolHandler.run_one()` 中先调用 `registry._resolve_injections()` 解析 `Injected` 参数，再 `await` 底层协程：
 
 ```python
 from ftre_agent_core.tool import Injected
@@ -447,8 +458,8 @@ class MyTool(Tool):
 - hook 函数抛异常会被捕获跳过，不会拖垮主流程
 - 同名插件只加载第一个，后续同名插件会被跳过
 - `Injected` 只能作为参数默认值使用（如 `x=Injected("x")`），不要写成类型注解
-- 同名插件工具之间会在 `ftre.tools.ToolRegistry.register()` 阶段抛出 `ValueError`；但插件工具与内置工具同名时，注册阶段不会报错，构建 Agent 时会由 `ftre-agent-core` 的工具注册表按名称覆盖内置工具
-- `FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre.tools.ToolRegistry` 实例。插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="", system=False)`。当前运行时 `command_manager` 为 `CommandManager` 实例（`main.py` 将其传入 `PluginManager`），因此此调用可以生效。`system=True` 注册的系统级指令在 session lock 外执行，默认普通指令在 lock 内执行。内置指令（如 `/cancel` 为系统级、`/compact` 为普通级）已在 `AgentLoop._register_commands()` 中直接注册
+- 同名插件工具之间会在 `ftre_agent_core.tool.ToolRegistry.register()` 阶段抛出 `ValueError`；但插件工具与内置工具同名时，注册阶段不会报错，构建 Agent 时会由 `ftre-agent-core` 的工具注册表按名称覆盖内置工具
+- `FtrePluginApi` 不提供 `register_tool()` 方法；插件注册工具需通过 `self.api.tool_registry.register(tool)`。`tool_registry` 属性返回 `ftre_agent_core.tool.ToolRegistry` 实例。插件注册斜杠指令需直接调用 `self.api.command_manager.register(command, handler, *, description="", args_hint="", system=False)`。当前运行时 `command_manager` 为 `CommandManager` 实例（`main.py` 将其传入 `PluginManager`），因此此调用可以生效。`system=True` 注册的系统级指令在 session lock 外执行，默认普通指令在 lock 内执行。内置指令（如 `/cancel` 为系统级、`/compact` 为普通级）已在 `AgentLoop._register_commands()` 中直接注册
 
 ## 校对记录
 
@@ -458,7 +469,7 @@ class MyTool(Tool):
    - `load_all()` 先用 `BUILTIN_DIR.glob("*.py")` 加载内置插件，再扫描 `PLUGINS_DIR`（`plugin/plugin.py`）；内置插件按 `Path.glob` 返回顺序加载，同一 hook 点上的执行顺序就是注册顺序；
     - `MessagesBuildContext` 字段（`session_id` / `channel_id` / `inbound_data` / `workspace` / `agent_dir` / `event_loop` / `config` / `events`）与 `plugin/hook_manager.py:52-76` 一致；其中 `event_loop` 默认 `None`，由 `_build_messages` 构造时未传入该字段（`agent/loop.py:714-722`）；
    - `CommandManager.register()` 签名 `register(command, handler, *, description="", args_hint="", system=False)` 与 `command/manager.py` 一致；
-   - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具；插件同名工具之间在 `ftre.tools.ToolRegistry.register()` 阶段会抛 `ValueError`；
+   - 插件工具与同名内置工具冲突时，`ftre-agent-core` 的 `ToolRegistry` 按名称覆盖内置工具；插件同名工具之间在 `ftre_agent_core.tool.ToolRegistry.register()` 阶段会抛 `ValueError`；
  - **2025-07-11**：补全 `FtrePluginApi` 文档中缺失的 `register_router()` 和 `append_system_prompt()` 方法。源码依据：`plugin/plugin.py:95-97`（`register_router`）。
   - **2025-07-18**：重构 system prompt 注入机制，新增 `before_agent_run` 挂点。
     - 删除 `append_system_prompt()` 方法与 `appended_system_prompts` 属性；

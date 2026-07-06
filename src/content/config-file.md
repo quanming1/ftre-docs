@@ -234,7 +234,6 @@ MCP 服务器配置。key 是服务器名称，可被 `agent.config.json` 的 `m
 
 ```json
 {
-  "id": "octo",
   "name": "Octo Bot",
   "llm": {
     "provider": "明略网关",
