@@ -27,7 +27,7 @@
 
 ```json
 {
-  "id": "<uuid-16>",
+  "frame_id": "<uuid-16>",
   "type": "<frame-type>",
   "data": { ... },
   "metadata": { ... }
@@ -36,7 +36,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:---:|------|
-| `id` | string | 建议 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端当前不强制校验。缺失时帧仍会被处理；仅 `user_message` / `cancel` 等进入 Bus 的帧会写入 `metadata.frame_id`，`attach` / `detach` 不回显该字段，因此无法用于服务端确认；后端 BusMessage 默认用 uuid4 hex 前 16 位 |
+| `frame_id` | string | 建议 | 帧唯一标识；前端通常用 `crypto.randomUUID().slice(0, 16)`，后端当前不强制校验。缺失时帧仍会被处理；仅 `user_message` / `cancel` 等进入 Bus 的帧会写入 `metadata.frame_id`，`attach` / `detach` 不回显该字段，因此无法用于服务端确认；后端 BusMessage 默认用 uuid4 hex 前 16 位 |
 | `type` | string | 是 | 帧类型，决定路由行为 |
 | `data` | object | 否 | 载荷，结构因 type 而异；后端对缺失 data 有容错（默认 `{}`） |
 | `metadata` | object | 否 | 附加元数据，进入后端 `BusMessage.metadata`；当前不参与 LLM 配置或消息构建，主要用于透传 `frame_id` 等控制信息 |
@@ -49,7 +49,7 @@
 
 ```json
 {
-  "id": "abc123def456",
+  "frame_id": "abc123def456",
   "type": "attach",
   "data": { "session_id": "ws::sess_xxx" }
 }
@@ -71,7 +71,7 @@
 
 ```json
 {
-  "id": "abc123def456",
+  "frame_id": "abc123def456",
   "type": "detach",
   "data": { "session_id": "ws::sess_xxx" }
 }
@@ -87,7 +87,7 @@
 
 ```json
 {
-  "id": "abc123def456",
+  "frame_id": "abc123def456",
   "type": "user_message",
   "data": {
     "content": "帮我写一个函数",
@@ -124,12 +124,12 @@
 1. 附件校验（`_validate_attachments`）：检查 mime_type、大小、数量
 2. 附件落盘（`_persist_attachments`）：base64 解码后存到 `~/.ftre/assets/images/`，将 `data` 字段替换为 `path`（文件绝对路径）。事件链路不再携带 base64
 3. 隐式 attach 当前 session
-4. `frame.id` 写入 `metadata.frame_id`
+4. `frame.frame_id` 写入 `metadata.frame_id`
 5. `data` + `metadata` → `Channel.receive(..., kind="user_message")` → Bus inbound → AgentLoop
 
-**id 与 frame_id 的用途**：
-- 前端发送时生成 `id`，同时本地 push 一条乐观占位消息（`userMsg.id = frame.id`）
-- 后端 `_on_message` 把 `frame.id` 写入 `metadata.frame_id`
+**frame_id 与 metadata.frame_id 的用途**：
+- 前端发送时生成 `frame_id`，同时本地 push 一条乐观占位消息（`userMsg.id = frame.frame_id`）
+- 后端 `_on_message` 把 `frame.frame_id` 写入 `metadata.frame_id`
 - AgentLoop echo `user_message` 时把 `metadata.frame_id` 回填到下行帧
 - 前端收到 echo，检查 `messages` 中是否已有同 id → 有则跳过，避免重复渲染
 
@@ -153,7 +153,7 @@
 
 ```json
 {
-  "id": "<message-uuid>",
+  "frame_id": "<message-uuid>",
   "type": "agent_event",
   "data": {
     "type": "<event-type>",
@@ -172,9 +172,9 @@
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
 | `event_id` | string | AgentEvent 的稳定事件 ID。core 创建 `AgentEvent` 时生成，WS 下行放在 `data.event_id`，DB 历史记录同步写入 `messages.data.event_id`。前端 reducer 用它统一去重 HTTP history、WS live、WS replay；同一个事件从不同路径到达时只渲染一次。旧历史行没有 `event_id` 时，gateway 启动迁移会用 `messages.id` 回填。 |
 
-> **注意区分 `id` 和 `event_id`**：`id` 是 WS 帧 ID，仅用于 `user_message` echo 去重（前端自己发的消息不再渲染第二次）；`event_id` 是事件 ID，用于所有事件的统一去重（HTTP / WS live / WS replay 三路）。两者职责不同，不可混用。
+> **注意区分 `frame_id` 和 `event_id`**：`frame_id` 是 WS 帧 ID，仅用于 `user_message` echo 去重（前端自己发的消息不再渲染第二次）；`event_id` 是事件 ID，用于所有事件的统一去重（HTTP / WS live / WS replay 三路）。两者职责不同，不可混用。
 
-**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件（`assistant_message` / `reasoning` / `tool_call_streaming` / `context_compact_start`），覆盖 HTTP history 与 WS attach 之间的 race。客户端 attach 时先补发这些缓存，再继续接收 live 流。重复帧由 `event_id` 在前端 reducer 统一去重。
+**Volatile Replay Buffer**：后端在 WS 层临时缓存未入库的流式事件（`assistant_message` / `context_compact_start`），覆盖 HTTP history 与 WS attach 之间的 race。客户端 attach 时先补发这些缓存，再继续接收 live 流。重复帧由 `event_id` 在前端 reducer 统一去重。`assistant_message_complete` 到达时同步清理对应的 `assistant_message` 草稿；`context_compact_done` / `context_compact_failed` 到达时清理 `context_compact_start`。
 
 ### 事件类型完整列表
 
@@ -199,91 +199,71 @@
 ```
 
 **用途**：
-1. **本地去重**：前端自己发的消息已有本地占位（同 `id`），echo 跳过渲染；`isBusy`、`error`、`retryState` 的实际切换由 `session_status` 全局事件负责（见下方全局广播）
+1. **本地去重**：前端自己发的消息已有本地占位（同 `frame_id`），echo 跳过渲染；`isBusy`、`error`、`retryState` 的实际切换由 `session_status` 全局事件负责（见下方全局广播）
 2. **跨 session 唤起**：当 `send_message` 工具触发远端 session 时，目标前端没有本地占位，echo 负责渲染用户气泡
 3. **多端同步**：其他客户端也能看到用户消息
 
-#### assistant_message — LLM 流式文本片段
+#### assistant_message — LLM 流式 assistant 快照
+
+`assistant_message` 是 LLM 流式输出过程中反复产出的 assistant 快照事件：每次 `ReActRunner._stream_turn()` 收到 `TextDelta` / `ReasoningDelta` / `ToolInputDelta` / `ToolCall` 增量时，会把累积到当前为止的 `content[]` 整体作为一条 `assistant_message` 事件发出。文本 / 推理 / 工具参数三类流式片段都封装在 `assistant_message.content[]` 中。
 
 ```json
 {
   "type": "agent_event",
   "data": {
     "type": "assistant_message",
-    "data": { "content": "你好，我是" }
-  }
-}
-```
-
-| data.data 字段 | 类型 | 说明 |
-|----------------|------|------|
-| `content` | string | 流式增量文本片段 |
-
-**前端处理**：
-- 无 streaming assistant 时自动创建一条空消息
-- 文本追加到 `parts[]` 末尾的流式 text part
-- 清除重试横幅（`retryState = null`，若存在）
-
-#### assistant_message_complete — LLM 一轮文本完成
-
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "assistant_message_complete",
-    "data": { "content": "你好，我是 ftre，一个 AI 编程助手。" }
-  }
-}
-```
-
-**前端处理**：
-- 找到 `parts[]` 中还在 streaming 的 text part，用完整文本覆盖并封口
-- 如果找不到（历史回放），push 一条已封口的新 text part
-- **不设置 `streaming = false`**（由 `done` 事件统一收尾）
-
-#### tool_call — 工具调用
-
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "tool_call",
     "data": {
-      "id": "call_abc123",
-      "name": "bash",
-      "arguments": { "command": "git status" }
-    }
-  }
-}
-```
-
-| data.data 字段 | 类型 | 说明 |
-|----------------|------|------|
-| `id` | string | 工具调用唯一 ID |
-| `name` | string | 工具名称 |
-| `arguments` | object | 工具参数 |
-
-**前端处理**：
-- 创建/更新 `toolCalls[]`，status 标记为 `"running"`
-- 在 `parts[]` 中插入 `tool_call` part（供 InlineToolCallCard 渲染）
-
-#### tool_call_streaming — 工具参数流式增量
-
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "tool_call_streaming",
-    "data": {
-      "tool_calls": [
-        { "id": "call_abc123", "name": "bash", "arguments_delta": "{\"command\"" }
+      "content": [
+        {"type": "text", "text": "我先检查"},
+        {"type": "toolCall", "id": "call_abc123", "name": "bash", "arguments": {"command": "ls"}}
       ]
     }
   }
 }
 ```
 
-**前端处理**：与 `tool_call` 逻辑相同，但 `arguments` 是增量拼接（`arguments_delta`）而非一次性完整。当前 `react_runner` 构造的下行 chunk 只包含 `id` / `name` / `arguments_delta`，不包含 `index`；前端也不依赖 `index`。当前 `chat.ts` 会跳过没有有效 `id` 的增量（`if (!c.id) continue`），因此后端/上游早期发出的空 id 参数片段可能不会被前端展示；消费端不应假设每个增量都一定能归并到可见工具卡片。
+| data.data 字段 | 类型 | 说明 |
+|----------------|------|------|
+| `content` | `list[dict]` | 当前累积的 `content[]` 快照。块类型与 `assistant_message_complete.content[]` 一致：`text` / `thinking` / `toolCall`。**streaming 阶段的 part 不携带 `event_id`**，event_id 只在 `_build_complete_events()` 产出 `assistant_message_complete` 时统一写入 |
+
+**前端处理**：
+- 无 streaming assistant 时自动创建一条空消息
+- 整体替换 `lastStreamingContent`（流式渲染时直接用 `content[]` 重建 text / reasoning / toolCall part）
+- 清除重试横幅（`retryState = null`，若存在）
+
+#### assistant_message_complete — LLM 一轮完整消息
+
+`assistant_message_complete` 是 LLM 一轮输出的完整消息。流式收束（收到 `StepFinish`）时由 `ReActRunner._build_complete_events()` 一次性发出。`content` 是内容块数组，混合 `text` / `thinking` / `toolCall`；`metadata` 携带 usage、kind、stopReason 等。
+
+```json
+{
+  "type": "agent_event",
+  "data": {
+    "type": "assistant_message_complete",
+    "data": {
+      "content": [
+        {"type": "thinking", "thinking": "用户想要查看目录...", "event_id": "<16-hex>"},
+        {"type": "text", "text": "我先检查当前目录。", "event_id": "<16-hex>"},
+        {"type": "toolCall", "id": "call_abc123", "name": "bash", "arguments": {"command": "ls"}, "event_id": "<16-hex>"}
+      ],
+      "metadata": {
+        "kind": "block",
+        "usage": {"prompt_tokens": 1200, "completion_tokens": 350, "total_tokens": 1550},
+        "stopReason": "tool_calls"
+      }
+    }
+  }
+}
+```
+
+**前端处理**：
+- 从 `content[]` 拆出 text 块、thinking 块、toolCall 块
+- text 块 → 构建完整文本（封口流式 text part）
+- thinking 块 → 构建完整 reasoning（封口流式 reasoning part）
+- toolCall 块 → 创建 `toolCalls[]`（status 标记为 `"running"`），在 `parts[]` 中插入 `tool_call` part
+- `metadata.usage` → 写入当前 streaming assistant 的 `usage` 字段
+
+> `assistant_message_complete` 同时封口 text / thinking / toolCall 三种 part，并承载 `metadata.usage` / `stopReason` / `model` / `responseId`。旧的 `reasoning_complete`、`tool_call`、`usage_update` 三个独立事件已合并到此事件中，不再单独产出。
 
 #### tool_result — 工具执行结果
 
@@ -320,57 +300,13 @@
 
 #### tool_cancel_requested / tool_cancelled
 
-这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES`（`agent/loop.py:414-423`）白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
+这两个类型当前**不在任何代码路径中**——既不在 `ftre-agent-core.agent.event.EventType` 枚举中，也不在 `AgentLoop._PERSISTENT_CLASSES` 白名单里，`event.py` 也没有对应的事件类，当前主运行路径不产出它们。取消最多表现为 `tool_result(status="cancelled")` + `done(reason="cancelled")`；前端 `applyEvent` 对这两类无 case 分支。
 
 注意：`tool_timed_out` 不在 `_PERSISTENT_CLASSES` 中，当前也没有统一的 `tool_timed_out` 实时事件；工具超时通常由具体工具返回失败结果或错误文本。
 
-#### reasoning — LLM 思考文本片段
+#### reasoning（已并入 assistant_message）
 
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "reasoning",
-    "data": { "content": "这个需求需要..." }
-  }
-}
-```
-
-**前端处理**：与 `message` 同逻辑，但写入 `reasoning` 字段和 `reasoning` 类型 part，用于展示思考过程。
-
-#### reasoning_complete — 思考文本完成
-
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "reasoning_complete",
-    "data": { "content": "用户想要一个函数来计算斐波那契数列..." }
-  }
-}
-```
-
-与 `assistant_message_complete` 对应，封口 reasoning part。`data.data.content` 为完整思考文本。
-
-#### usage_update — Token 用量更新
-
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "usage_update",
-    "data": {
-      "usage": {
-        "prompt_tokens": 1200,
-        "completion_tokens": 350,
-        "total_tokens": 1550
-      }
-    }
-  }
-}
-```
-
-**前端处理**：写入当前 streaming assistant 的 `usage` 字段。
+> `reasoning` 不是一个独立的下行事件类型。`ReasoningDelta` 流入 `ReActRunner._stream_turn()` 后，推理文本会累积到 `partial_content` 的 `thinking` 块，并通过 `assistant_message` 事件携带的 `content[]` 对外暴露（块结构 `{type: "thinking", thinking: "...", event_id: "..."}`），最终在 `assistant_message_complete` 中封口。客户端读取 `assistant_message.content[]` 的 `thinking` 块即可拿到完整推理链。
 
 #### error — Agent 错误
 
@@ -426,7 +362,7 @@
 
 **前端处理**：
 - 清理 streaming assistant 尾部未封口的 part 片段
-- 保留已完成的 tool_call / tool_result
+- 保留已完成的 assistant_message_complete / tool_result
 - 设置 `retryState` 显示重试横幅
 
 #### done — 响应结束
@@ -457,10 +393,11 @@
 |----------------|------|------|
 | `success` | bool | 是否成功 |
 | `reason` | string | `"completed"`（正常完成）/ `"max_iterations"` / `"error"` / `"cancelled"` |
-| `usage` | object | 总 Token 用量（可选；当前运行时不填充此字段，前端不消费 done 事件的 usage，由 `usage_update` 事件单独推送） |
+
+> Token 用量不再通过 `done` 事件传递，而是在 `assistant_message_complete.metadata.usage` 中。
 
 **前端处理**：
-- `sealStreamingPart()` 封口末尾仍在 streaming 的 text/reasoning part；`assistant_message_complete` / `reasoning_complete` 负责按类型查找并封口对应流式段
+- `sealStreamingPart()` 封口末尾仍在 streaming 的 text/reasoning part（`assistant_message_complete` 已封口大部分，`done` 兜底处理异常路径）
 - 设置 `streaming = false`
 - 当前前端会将仍处于 running/pending 的 toolCalls 标记为 `"ok"`
 - 清空 `retryState`
@@ -672,7 +609,7 @@
 
 ```json
 {
-  "id": "<original-frame-id>",
+  "frame_id": "<original-frame-id>",
   "type": "error",
   "data": {
     "code": "invalid_input",
@@ -758,7 +695,7 @@
 
 ### attach / detach — 无确认响应
 
-这两个帧是 **fire-and-forget**。后端收到后直接 `return`，不返回任何确认帧。即使上行带了 `id`，该值也只对客户端本地有意义，后端不会回显；前端无需等待响应。
+这两个帧是 **fire-and-forget**。后端收到后直接 `return`，不返回任何确认帧。即使上行带了 `frame_id`，该值也只对客户端本地有意义，后端不会回显；前端无需等待响应。
 
 ### context_compact — 上下文压缩
 
@@ -823,6 +760,8 @@
     - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-288`）；
    - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
  - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:465-475`。
-- **2026-07-01**：修正 Volatile Replay Buffer 描述。原文称 buffer「短暂保留刚入库的稳定事件」，但源码中 `VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}`（`channel/ws_channel.py:52-57`）只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_call` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE`（`channel/ws_channel.py:60-67`）触发清理而非进入 buffer。已删除「短暂保留稳定事件」的错误表述。
-- **2026-07-03**：修正 `metadata.agent_id` 描述。原 JSON 示例和 metadata 表格中默认值为 `"code_agent"`，实际前后端默认均为 `"default"`（`loop.py:425`）。原称 `metadata.agent_id` "不会改变本次 LLM 配置"，实际后端通过 `agent_manager.load(agent_id)` 加载 per-agent LLM/workspace 配置。同时在 HTTP API 路由表中补充缺失的 `GET /api/agents` 路由（`routes.py:503`）。
-- **2026-07-19**：行号复验。`agent_id` 默认值解析代码当前位于 `loop.py:443`（`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），与本条 2026-07-03 记录中 `loop.py:425` 相比漂移 18 行。`AgentLoop._PERSISTENT_CLASSES` 当前位于 `loop.py:414-423`（原记录标注 `396-405`）。`VOLATILE_EVENT_TYPES` 与 `VOLATILE_CLEAR_BY_TYPE` 当前在 `ws_channel.py:52-67`，与原文描述一致。`ws_channel._attach()` 方法当前在 `ws_channel.py:458-462`（原 2025-06-26 校对记录标注 `525` / `559`，已漂移，但 fire-and-forget 行为本身不变）。`/api/agents` 路由当前在 `routes.py:503-509`（`list_agents`），`/api/agents/{agent_id}` 路由在 `routes.py:511+`，`/api/agents/{agent_id}/prompts` 在 `routes.py:537-543`。正文所有关键事实与源码一致，无需修订。
+- **2026-07-01**：修正 Volatile Replay Buffer 描述。`VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}` 只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE` 触发清理而非进入 buffer。
+- **2026-07-19**：行号复验。所有关键事实与源码一致。
+- **2026-07-20**：协议改造。`assistant_message_complete` 的 `content` 从 `str` 改为 `list[dict]`（含 text/thinking/toolCall，每个块带 `event_id`），新增 `metadata`（含 `kind` / `usage` / `stopReason` / `model` / `responseId`，无 `provider` / `error` 字段）；删除 `reasoning_complete` / `tool_call` / `usage_update` 三个独立事件（已合并）；`VOLATILE_CLEAR_BY_TYPE` 中 `assistant_message_complete` 清理集改为 `{assistant_message, reasoning, tool_call_streaming}`；`done` 事件去掉 `usage` 字段。
+- **2026-07-21**：删除 `reasoning` / `tool_call_streaming` 事件类型及 `ReasoningEvent` / `ToolCallStreamingEvent` 类。`assistant_message` 的 `content` 从 `str`（单 chunk）改为 `list[dict]`（完整累积快照）。Volatile buffer 简化：`VOLATILE_EVENT_TYPES = {assistant_message, context_compact_start}`，持久化事件（`assistant_message_complete` / `tool_result` 等）不进 buffer，`assistant_message_complete` 到达时清除 `assistant_message` 且自身不进 buffer。`VOLATILE_CLEAR_BY_TYPE` 中 `assistant_message_complete` 的清理集由上一条记录的 `{assistant_message, reasoning, tool_call_streaming}` 收窄为 `{assistant_message}`（与 `channel/ws_channel.py:59-63` 当前实现一致）。`assistant_message` 的 streaming part 不携带 `event_id`（event_id 只在 `_build_complete_events()` 产出 `assistant_message_complete` 时统一写入）；`StepFinish` 实际携带 `finish_reason` / `usage` / `response_metadata` 三字段，原 2026-07-20 记录遗漏 `response_metadata`。
+- **2026-07-22**：WS 帧 JSON 顶层 `"id"` 字段更名为 `"frame_id"`，消除与 `"event_id"` 的命名混淆。涉及 `ws_channel.py`（序列化/反序列化）、`websocket-client.ts`（`ServerMessage.id` → `frame_id`）、`chat.ts`（`BusEvent.id` → `frameId`）。
