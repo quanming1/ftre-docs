@@ -143,7 +143,7 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
   return (
     <aside className="doc-toc hidden xl:block">
       <div className="sticky top-6 max-h-[calc(100vh-160px)] overflow-y-auto">
-        <div className="mb-3 px-3 text-[11px] font-medium uppercase tracking-wider text-black/40">
+        <div className="mb-3 px-3 text-[12px] font-medium uppercase tracking-wider text-black/40">
           本页目录
         </div>
         <nav className="border-l border-transparent">
@@ -151,7 +151,7 @@ function DocToc({ items, activeId, onItemClick }: { items: TocItem[]; activeId: 
             <button
               key={item.id}
               onClick={() => onItemClick(item.id)}
-              className={`block w-full truncate border-l-2 py-[3px] text-left text-[12.5px] leading-[18px] transition-colors ${
+              className={`block w-full truncate border-l-2 py-[3px] text-left text-[13.5px] leading-[18px] transition-colors ${
                 item.level === 3 ? 'pl-5' : 'pl-3'
               } ${
                 activeId === item.id
