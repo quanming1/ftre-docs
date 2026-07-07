@@ -255,7 +255,7 @@ MCP 服务器配置。key 是服务器名称，可被 `agent.config.json` 的 `m
 | `AGENTS.md` | `<AGENTS_RULE>` | 行为规范：工作方式、约束（优先从 Agent 目录读取，回退到工作区目录） |
 | `USER.md` | `<USER_PROFILE>` | 用户偏好与个人要求 |
 
-> `AGENTS.md` 由 `context_govern` 插件注入（`before_messages_build` hook）：优先从 Agent 目录（`agent_dir/AGENTS.md`）读取；若 Agent 目录没有该文件，则回退到工作区目录（`workspace/AGENTS.md`）。只注入一个文件，不叠加。`SOUL.md` 和 `USER.md` 则直接由 `AgentManager` 在合成 system prompt 时注入。
+> `AGENTS.md` 由 `context_govern` 插件注入（`before_messages_build` hook）：同时注入两份（如果都存在，叠加注入）——`agent_dir/AGENTS.md`（Agent 行为规则）和 `workspace/AGENTS.md`（项目约定）。`SOUL.md` 和 `USER.md` 则直接由 `AgentManager` 在合成 system prompt 时注入。
 
 ## 私有 Skill
 

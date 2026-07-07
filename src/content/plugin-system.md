@@ -382,13 +382,15 @@ Hook 上下文中的 `config` 是 `AgentConfig` 的副本（`before_messages_bui
 
 ### 自定义 Hook
 
-`HookManager` 只提供同步触发接口 `trigger_sync(point, ctx)`。框架当前自动触发 `before_messages_build` 和 `before_agent_run`；如果你在扩展代码里手动触发自定义挂点，可复用同一个 HookManager：
+`HookManager` 提供异步触发接口 `trigger(point, ctx)`。框架当前自动触发 `before_messages_build` 和 `before_agent_run`；如果你在扩展代码里手动触发自定义挂点，可复用同一个 HookManager：
 
 ```python
 from ftre.plugin import HookManager
 
-hook_manager.trigger_sync("my_custom_point", ctx)
+ctx = await hook_manager.trigger("my_custom_point", ctx)
 ```
+
+> 所有 hook 均为异步执行。hook 函数可以是 `async def` 也可以是普通 `def`——`trigger` 会检测返回值是否为 coroutine 并自动 `await`。
 
 ---
 
