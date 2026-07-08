@@ -317,6 +317,47 @@ subagent 内禁止调用。禁止发给当前 session 自己。
 
 ---
 
+## 前端展示
+
+工具调用结果在前端 `InlineToolCallCard` 中渲染：
+
+### 普通工具（bash / cron / task / send_message 等）
+
+点击展开 inline 详情：参数 + 结果文本 + 错误信息（失败时）。bash 输出使用 `ExpandedDetail` 渲染（带语法高亮），read 走 `ReadDetail` 渲染（带图片预览）。
+
+### 文件工具（read / edit / write）
+
+三种交互模式：
+
+| 状态 | 行为 |
+|------|------|
+| 成功完成 + 有 metadata | 点击整行打开右侧 Inspector 面板；messageList 中不展开 |
+| 失败（error）或无 metadata | 回退 inline 展开/折叠，显示错误信息 |
+| 执行中 | Loader2 spinner，行不可点击 |
+
+**Inspector 面板打开逻辑：**
+
+| 工具 | 打开的 Tab | 数据来源 |
+|------|-----------|---------|
+| `edit` / `write` | diff 预览 | `metadata.before` / `metadata.after` / `metadata.additions` / `metadata.deletions` |
+| `read` | 文件预览 | `metadata.content` 内容快照 + `metadata.start_line` / `metadata.end_line` 跳转 |
+
+`InspectorPanel` 的 `FilePreviewContent` 优先使用 `tab.content` 渲染（不回读磁盘），无 content 时走 `window.desktop.fs.readFile()` 从磁盘加载；`fileCache` 缓存已加载文件，切回已开 tab 秒切。
+
+**edit 行展示：** 成功时行尾显示 `+N -M` 增删数（绿/红色），不再显示 Check 图标。整行 hover 仅改变文字颜色（`group-hover:text-t-primary`），无背景色。
+
+### Inspector 面板宽度
+
+| 常量 | 值 | 说明 |
+|------|---|------|
+| `INSPECTOR_WIDTH_MIN` | 280 | 拖拽下限 |
+| `INSPECTOR_WIDTH_MAX` | 9999 | 上限无实际约束 |
+| `INSPECTOR_WIDTH_DEFAULT` | 480 | 默认宽度 |
+
+拖拽分隔条持久化到 `ftre-layout-state` localStorage。
+
+---
+
 ## 编码与换行保真
 
 `_io.py` 提供文件 IO 辅助，`read` / `write` / `edit` 共用：
@@ -355,3 +396,9 @@ subagent 内禁止调用。禁止发给当前 session 自己。
   - `read` 的三分支（图片/目录/文本）、编码检测、大文件保护、图片压缩与 `read.py` 一致；
   - `filter_tools()` 按 `allow/deny` 原地过滤，与 `__init__.py:21-45` 一致；
   - `react_runner` 在 `tool_result_event()` 中传入 `metadata=result.metadata`，与 `react_runner.py:737` 一致。
+- **2026-07-08**：前端展示章节补充。
+  - `InlineToolCallCard` 对 read/edit/write 的交互逻辑：成功 + 有 metadata → 点击整行打开 Inspector；失败/无 metadata → 回退 inline 展开。与 `InlineToolCallCard.tsx:360-400` 一致。
+  - `InspectorTab.content` 字段：来自 `openFilePreview` 的第 5 参数（read metadata.content），`FilePreviewContent` 优先用 snapshotFile 渲染，与 `inspector.ts` 和 `InspectorPanel.tsx` 一致。
+  - edit 行展示 `+N -M`（additions 绿色 / deletions 红色），不再用 Check 图标；hover 字体变色无背景色。与 `InlineToolCallCard.tsx:505-521` 一致。
+  - `INSPECTOR_WIDTH_MAX` 从 800 改为 9999，无实际上限，与 `layout.ts:25` 一致。
+  - `read` 工具 metadata schema（file/content/start_line/end_line）与 `read.py:218-229` 一致（之前误用 `content` 变量名，已修正为 `tf.text`）。
