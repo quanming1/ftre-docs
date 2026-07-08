@@ -47,7 +47,7 @@ Octo IM Server (WuKongIM 二进制协议)
 | `_api.py` | 通道类型常量 + `external_key` / fallback `session_id` 工具函数 + `extract_parent_group_no()` + `OctoBotApi` HTTP 客户端 |
 | `_mention.py` | @ 检测门控（含广播抑制）+ 群成员缓存（5 分钟 TTL）与格式化 |
 | `_channel.py` | `OctoChannel` 类：WS 连接管理、消息收发、历史消息 API 拉取与分段注入 |
-| `_tools.py` | `octo_management` Agent 工具（4 个操作：list-groups / group-info / group-members / search-members） |
+| `_tools.py` | `octo_management` Agent 工具（5 个操作：list-groups / group-info / group-members / search-members / fetch-history） |
 | `_plugin.py` | `OctoChannelPlugin`：注册 Channel、`BEFORE_AGENT_RUN` hook、私有工具注册 |
 | `octo-bridge.js` | Node.js WuKongIM 协议桥接：二进制解密 → 本地 JSON WS |
 
@@ -141,6 +141,7 @@ PluginManager 将子目录加入 `sys.path`，然后 `importlib.import_module(�
 | `group-info` | `GET /v1/bot/groups/{groupNo}` | 查看群信息 |
 | `group-members` | `GET /v1/bot/groups/{groupNo}/members` | 查看群成员 |
 | `search-members` | `GET /v1/bot/space/members` | 搜索空间成员（keyword 参数） |
+| `fetch-history` | `POST /v1/bot/messages/sync`（内部 `bot_api.get_channel_messages`） | 按需拉取当前频道的更多历史消息（参数：`limit` ≤ 200、`beforeSeq` 分页） |
 
 ### 消息发送行为
 

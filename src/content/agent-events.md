@@ -166,7 +166,44 @@ LLM 一轮输出的**完整消息**。chunk 累积完毕后统一发出，`conte
 | `error` | string \| null | null 表示成功 |
 | `status` | string | 当前运行时实际会出现 `"completed"` / `"failed"` / `"cancelled"`；`"timed_out"` 当前未在 `ToolResult` 或 `tool_result_event()` 中实现。**注意**：前端当前用 `!!d.error` 判断 ok/error，不读取 `d.status`；取消/中断路径下可能出现 `status="cancelled"` 且 `error=null`，前端会将其映射为 `"ok"`，因此客户端若需要区分取消状态应优先读取 `status` |
 | `error_code` | string \| null | 错误码（`react_runner` 调用 `tool_result_event()` 时未传入此参数，默认为 `null`） |
-| `metadata` | object | 预留的工具附加元数据字段；`react_runner` 当前调用 `tool_result_event()` 时未将 `ToolResult.metadata` 传入，因此即使中间件 after 钩子补充了 metadata 也不会出现在事件中，此字段通常不存在 |
+| `metadata` | object \| undefined | 工具附加元数据。仅文件编辑类工具（`edit` / `write`）会填充此字段，携带 diff 信息供前端渲染文件变更预览。其他工具不产出此字段。详见下表 |
+
+#### tool_result.metadata（文件编辑工具）
+
+当 `edit` 或 `write` 工具执行成功后，`metadata` 携带变更的 diff 信息。diff 由 Python 标准库 `difflib.unified_diff()` 在内存中对比修改前后的文件内容生成，不依赖 git。
+
+```json
+{
+  "type": "tool_result",
+  "data": {
+    "id": "call_xyz789",
+    "name": "edit",
+    "result": "已修改文件 src/foo.ts",
+    "error": null,
+    "status": "completed",
+    "error_code": null,
+    "metadata": {
+      "file": "E:/project/src/foo.ts",
+      "before": "const x = 1;\nconst y = 2;\nconst z = 3;\n",
+      "after": "const x = 1;\nconst y = 3;\nconst z = 3;\n",
+      "diff": "--- src/foo.ts\n+++ src/foo.ts\n@@ -10,7 +10,7 @@\n const x = 1;\n-const y = 2;\n+const y = 3;\n const z = 3;\n",
+      "additions": 1,
+      "deletions": 1
+    }
+  }
+}
+```
+
+| metadata 字段 | 类型 | 说明 |
+|---------------|------|------|
+| `file` | string | 被修改文件的绝对路径（正斜杠格式） |
+| `before` | string | 修改前的完整文件内容 |
+| `after` | string | 修改后的完整文件内容 |
+| `diff` | string | unified diff 格式的变更摘要文本（仅含 hunk 片段） |
+| `additions` | int | 新增行数（`+` 开头且非 `+++` 的行数） |
+| `deletions` | int | 删除行数（`-` 开头且非 `---` 的行数） |
+
+> **设计参考**：opencode 的 edit 工具同样在 `tool_result.metadata` 中携带 `{ diff, filediff, diagnostics }`，前端直接从 metadata 读取 diff 渲染，无需二次读取文件。ftre 采用相同模式，但用 Python `difflib` 替代 npm `diff` 包。
 
 ### tool_cancel_requested / tool_cancelled
 

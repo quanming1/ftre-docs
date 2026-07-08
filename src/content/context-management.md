@@ -145,18 +145,19 @@ LLM 直调：
 
 ## 5. 上下文重建
 
-`SessionManager.to_openai_messages()` 处理 `context_compact`：
+`SessionManager.to_openai_messages()` 处理 `context_compact`（`data` 在循环顶部已由 `data = event.get("data") or {}` 取出，此处直接复用）：
 
 ```python
 elif _t == "context_compact":
-    data = event["data"] or {}
     if data.get("enabled", True) is not True:
         continue
-    # 新格式直读，不需要 flush 缓冲
     messages = []              # 清空之前累积的 messages
     summary = data.get("summary", "")
     if summary:
-        messages.append({"role": "user", "content": f"[历史上下文摘要]\n{summary}"})
+        messages.append({
+            "role": "user",
+            "content": f"[历史上下文摘要]\n{summary}",
+        })
 ```
 
 含义：
