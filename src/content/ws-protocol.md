@@ -170,7 +170,9 @@
 |---------------|------|------|
 | `channel_id` | string | 目标 Channel ID，即后端 `BusMessage.to_channel`；普通 ws 消息为 `"ws"`，全局广播为 `"*"` |
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
-| `event_id` | string | AgentEvent 的稳定事件 ID。core 创建 `AgentEvent` 时生成，WS 下行放在 `data.event_id`，DB 历史记录同步写入 `messages.data.event_id`。前端 reducer 用它统一去重 HTTP history、WS live、WS replay；同一个事件从不同路径到达时只渲染一次。旧历史行没有 `event_id` 时，gateway 启动迁移会用 `messages.id` 回填。 |
+| `frame_id` | string | 由 `ws_channel.send()` 写入，等于 `BusMessage.id`（uuid4 hex 前 16 位）。客户端常用来匹配上行请求的回包 |
+
+> **关于 `event_id`**：AgentEvent 的稳定事件 ID 不在 metadata 字段里，而是位于 `data.data.event_id`（`agent_event` wrapper 内层 `data.type` 同级）。core 创建 `AgentEvent` 时生成（`uuid.uuid4().hex[:16]`），DB 历史记录同步写入 `messages.data.event_id`；前端 reducer 用它统一去重 HTTP history、WS live、WS replay；同一个事件从不同路径到达时只渲染一次。旧历史行没有 `event_id` 时，gateway 启动迁移会用 `messages.id` 回填（`session/manager.py:_migrate_backfill_message_event_id`）。
 
 > **注意区分 `frame_id` 和 `event_id`**：`frame_id` 是 WS 帧 ID，仅用于 `user_message` echo 去重（前端自己发的消息不再渲染第二次）；`event_id` 是事件 ID，用于所有事件的统一去重（HTTP / WS live / WS replay 三路）。两者职责不同，不可混用。
 
@@ -292,7 +294,7 @@
 | `error` | string \| null | 非 null 表示执行失败 |
 | `status` | string | `"completed"` / `"failed"` / `"cancelled"` |
 | `error_code` | string \| null | 错误码（`react_runner` 调用 `tool_result_event()` 时未传入此参数，默认为 `null`） |
-| `metadata` | object | 预留的工具附加元数据字段；`react_runner` 当前调用 `tool_result_event()` 时未将 `ToolResult.metadata` 传入，因此即使中间件 after 钩子补充了 metadata 也不会出现在事件中，此字段通常不存在 |
+| `metadata` | object | 工具附加元数据。`react_runner` 当前调用 `tool_result_event()` 时已传入 `metadata=result.metadata or None`（`react_runner.py:737`），所以该字段会出现在事件中。文件编辑类工具（`edit` / `write`）会返回 `(result_str, diff_metadata)` 元组把 diff 信息填入 metadata，供前端渲染文件变更预览；其他工具不主动填充 metadata |
 
 **前端处理**：
 - 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`），同时更新 `name`（`d.name || tc.name`，优先使用事件中的 name）

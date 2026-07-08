@@ -38,6 +38,9 @@ export const docs: DocEntry[] = [
   { path: 'mcp', title: 'MCP 服务器', category: '配置' },
   { path: 'skill', title: 'Skill', category: '配置' },
 
+  // 工具
+  { path: 'tools', title: '内置工具', category: '工具' },
+
   // 客户端
   { path: 'client/session-loading', title: '切换 Session 数据加载', category: '客户端' },
 ]
