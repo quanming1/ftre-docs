@@ -133,3 +133,9 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
   - `context_govern`：tool_call 不再是独立事件类型，而是嵌在 `assistant_message_complete` 的 `content[]` 中（`type="toolCall"`）；治理步骤从四项缩减为三项（孤立清理 / 去重 / 悬挂丢弃），删除「相邻性修复」（新协议天然相邻）；去重同时覆盖 toolCall block 和 tool_result 事件；AGENTS.md 改为双注入（agent_dir + workspace 叠加，不再回退）。
   - `mcp`：支持公共 MCP（`config.json`）+ Agent 私有 MCP（`agent.config.json`）两层配置；`BEFORE_AGENT_RUN` hook 改为 async，在 hook 中 `ensure_connections` → `build_mcp_tools_for_servers` → 注册到 per-agent registry；HTTP API 加 `?scope=global|private` 参数。
   - 所有 hook 改为异步执行（`HookManager.trigger` 替代 `trigger_sync`），4 个内置插件 + Octo 插件的 hook 回调全部改为 `async def`。
+- **2026-08-08**：复验 4 个内置插件的当前实现。
+  - `title_gen`（`plugin/builtin/title_gen.py:36-45`）：注册 `BEFORE_MESSAGES_BUILD` hook（`title_gen.py:41`），`_on_build` 在 events 为空时判断首条消息（`title_gen.py:51-57`），守护线程跑 `LLMHandler.stream` 生成标题（`title_gen.py:137-180`），与文档"工作原理"描述一致。
+  - `context_govern`（`plugin/builtin/context_govern.py:36-112`）：注册 `BEFORE_MESSAGES_BUILD` hook（`context_govern.py:41`），按孤立清理 / 去重 / 悬挂丢弃三步处理事件流（`context_govern.py:43-60`），注入 `agent_dir/AGENTS.md` + `workspace/AGENTS.md` 两份（`context_govern.py:64-112`），与本文档"修复能力"和"AGENTS.md 注入"章节一致。
+  - `skill`（`plugin/builtin/skill_plugin.py:35-66`）：注册 `BEFORE_AGENT_RUN` hook（`skill_plugin.py:49`），通过 `append_to_first_system(ctx.messages, ...)` 注入 `<skill_desc>` 和 `<skill_list>` 两块（`skill_plugin.py:51-66`），同时注册 `loadSkill` 工具和 `/api/skills` router；与本文档"工作原理"章节一致。
+  - `mcp`（`plugin/builtin/mcp_plugin.py:29-110`）：注册 `BEFORE_AGENT_RUN` hook（`mcp_plugin.py:39`），`append_to_first_system` 注入 `<mcp_desc>`（`mcp_plugin.py:108`），同时注册 `/api/mcp` router（`mcp_plugin.py:130-271`）和异步启动连接（`mcp_plugin.py:46-52`）；与本文档"工作原理"章节一致。
+  - `context_govern` 的 4 项 tool 事件治理（孤立 / 去重 / 悬挂）均通过 `assistant_message_complete.content[].toolCall` 提取 call id（`context_govern.py:22-33`），与协议改造后的事件结构匹配。

@@ -79,3 +79,7 @@ DB wire format:
 - [ ] core tests
 - [ ] ftre tests
 - [ ] 重启 Gateway 端到端测试
+
+## 校对记录
+
+- **2026-08-08**：本文是历史计划记录。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举使用 `ASSISTANT_MESSAGE = "assistant_message"` 和 `ASSISTANT_MESSAGE_COMPLETE = "assistant_message_complete"`，`AssistantMessageEvent` / `AssistantMessageCompleteEvent` 类已在 `event.py:143-171` 定义，构造函数 `assistant_message_event()` / `assistant_message_complete_event()` 已在 `event.py:321-359` 实现；DB wire format 已统一为 `assistant_message` / `assistant_message_complete`；`agent-events.md`（即本文档 Task 10）已同步更新（旧 `message` / `message_complete` 名称不再出现）。本文档保留为设计演化参考，具体实现请以当前源码为准。

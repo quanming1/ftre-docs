@@ -160,7 +160,7 @@ WebSocketChannel.send()
 | `provider` | string | 前端模型选择 UI | 当前选中的 Provider 名称（如 `"openai"`）。**注：前端发送，后端当前未使用（Provider 从配置文件加载）** |
 | `agent_id` | string | 前端 | Agent ID，默认 `"default"`。后端 `AgentLoop._run_async()` 通过 `inbound.metadata.get("agent_id", "") or "default"` 读取该值，并调用 `agent_manager.load(agent_id)` 加载 per-agent 配置（LLM、workspace 等） |
 | `session_id` | string | 前端 | 当前 session ID。**注：前端发送，后端从 `data.session_id` 读取，`metadata.session_id` 当前未使用** |
-| `frame_id` | string | `ws_channel._on_message()` | 由 ws channel 从上行帧 `id` 字段自动注入到 metadata（非客户端主动设置） |
+| `frame_id` | string | `ws_channel._on_message()` | 由 ws channel 从上行帧 `frame_id` 字段自动注入到 metadata（非客户端主动设置；WS 帧 JSON 顶层 `id` 字段已重命名为 `frame_id`，见 [WebSocket 协议](/docs/ws-protocol)） |
 
 ### 下行（后端填充）
 
@@ -176,7 +176,9 @@ WebSocketChannel.send()
   - `BusMessage` 字段（`id` / `type` / `from_channel` / `from_session` / `to_channel` / `to_session` / `data` / `metadata` / `timestamp`）与 `bus/message.py:17-36` 一致；`id` 由 `uuid.uuid4().hex[:16]` 生成（前 16 位 hex）；
   - `GLOBAL_CHANNEL = "*"` 与 `GLOBAL_SESSION = "*"` 定义在 `bus/message.py:13-14`；
   - `MIRROR_TO_WS_CHANNELS = {"cron"}` 定义在 `channel/manager.py:13`，并由 `_dispatch_loop` 在 cron channel 分发后镜像到 ws；
-   - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`），不再产生 `type="cancel"` 的 BusMessage；
+   - `cancel` 帧由 `ws_channel._on_message` 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:481-499`），不再产生 `type="cancel"` 的 BusMessage；
   - `_PERSISTENT_CLASSES` 不包含 `assistant_message` / `reasoning`（流式增量）/ `retry` / `tool_cancel_requested` / `tool_cancelled`，这些类型不入库。
 - **2026-07-03**：修正 `metadata.agent_id` 描述。原称默认 `"code_agent"` 且"后端当前未使用"，实际默认为 `"default"`（`loop.py:425`：`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），且后端通过 `agent_manager.load(agent_id)` 加载 per-agent 配置（LLM、workspace 等），并非未使用。
-- **2026-07-19**：行号复验。`agent_id` 默认值解析代码当前位于 `loop.py:443`（`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），与本条 2026-07-03 记录中 `loop.py:425` 相比因代码演进漂移 18 行；正文事实本身不变。
+- **2026-07-19**：行号复验。`agent_id` 默认值解析代码当前位于 `loop.py:437`（`agent_id = (inbound.metadata or {}).get("agent_id", "") or "default"`），与本条 2026-07-03 记录中 `loop.py:425` 相比因代码演进漂移 12 行；正文事实本身不变。
+- **2026-07-08**：frame_id 字段名变更同步。`bus-message.md` 中"上行 frame_id"原描述"由 ws channel 从上行帧 `id` 字段自动注入"，但 WS 帧 JSON 顶层 `id` 字段已在 ws-protocol 协议改造中更名为 `frame_id`（`ws_channel.py:528`：`frame_id = frame.get("frame_id") or ""`）。修正为"由 ws channel 从上行帧 `frame_id` 字段自动注入"。
+- **2026-08-08**：复验 `CompactManager._notify` 全异步实现。当前源码 `agent/compact_manager.py:407-424` 的 `_notify()` 方法体内 `await self.bus.publish_outbound(msg)` 直接 await，与本文档"全异步方法，直接 await self.bus.publish_outbound(msg)，不需要 run_coroutine_threadsafe 桥接"描述一致。`send_message._do_notify()` 同样在 `tools/send_message.py` 内全异步实现，无须桥接。

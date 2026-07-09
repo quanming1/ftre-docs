@@ -131,6 +131,8 @@ LLM 直调：
 
 输出摘要必须满足基本有效性检查：非空、长度 ≥ 200、包含 markdown 标题（`## `）。失败时不写脏摘要。
 
+> 摘要的最低字数阈值实际由 `_build_prompt(min_chars=...)` 动态计算：源码 `compact_manager.py:369` 取 `max(200, int(_estimate_body_chars(context) * 0.6))`，即至少 200 字，并按对话正文长度追加 60% 系数（避免对话极短时硬卡 200）。文档说明保留"≥ 200 字"的最简形式，与实际值一致。
+
 ### 4.4 去重
 
 后台压缩触发频繁，避免重复压缩：
@@ -285,3 +287,4 @@ ftre 的差异：
 
 - **2026-07-19**：行号复验。代码持续演进后偏移，所有关键行为仍与源码一致。
 - **2026-07-20**：协议改造对齐。`usage_update` / `reasoning_complete` / `tool_call` 三个独立事件已合并到 `assistant_message_complete`（分别嵌入 `metadata.usage` / `content[].thinking` / `content[].toolCall`）；compact 调度触发从 `usage_update` 改为 `assistant_message_complete.metadata.usage`；`to_openai_messages()` 中 `context_compact` 处理不再需要 `_flush_tool_calls()` / `_take_reasoning()`（新格式直读，无缓冲）；`_serialize_events` 改为从 `assistant_message_complete.content[]` 拆出 text/thinking/toolCall。
+- **2026-08-08**：补充摘要字数动态计算的细节。原文档写"非空、长度 ≥ 200"未提及 `min_chars` 在源码中实际是 `max(200, int(_estimate_body_chars(context) * 0.6))` 动态计算（`compact_manager.py:369`）。已补一行说明，正文"≥ 200 字"的最简描述与实际行为一致（动态值始终 ≥ 200）。

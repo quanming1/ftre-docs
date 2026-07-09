@@ -109,3 +109,7 @@ Agent 可在 SKILL.md 中引用 `references/` 下的文档路径。
 | 扩展方向 | 告诉 Agent 怎么做 | 给 Agent 新工具 |
 | 加载时机 | 按需 / 自动匹配 | 启动时连接 |
 | 热更新 | 改文件即可 | 改配置自动重连 |
+
+## 校对记录
+
+- **2026-08-08**：复验 Skill 系统实现。当前 `ftre/src/ftre/plugin/builtin/skill_plugin.py` 提供 4 类文件格式 `<name>.md` / `<name>/SKILL.md` / `<name>/skill.md`（`skill_plugin.py:421-425` 的 `_find_skill_file` 与 `:396-418` 的 `list_skill_descriptions`），与本文档"目录结构"表格一致；`loadSkill` 工具由 `create_load_skill_tool` 构造（`skill_plugin.py:329-387`），搜索顺序先私有后全局（`skill_plugin.py:349-364`），与"加载顺序"一致；`BEFORE_AGENT_RUN` hook（`skill_plugin.py:49`）注入 `<skill_desc>` + `<skill_list>` 提示词（`skill_plugin.py:51-66`），合并全局 + 当前 agent 私有 skill（`skill_plugin.py:288-326`），与"私有 Skill 合并规则"一致；`disabled_skills` 全局值从 `config.json` 读取（`skill_plugin.py:68-84`），per-agent 由 `agent.config.json` 整体覆盖（`skill_plugin.py:91-104`），与本文档"整体替换"一致。

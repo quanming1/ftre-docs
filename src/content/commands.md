@@ -172,3 +172,4 @@ self.command_manager.register(
 ## 校对记录
 
 - **2025-06-26**：补全 `CommandManager` 低级 API 描述。新增 `dispatch_system(raw, meta=None)`（系统级版本），与 `dispatch(raw, meta=None)`（普通级版本）对称。源码依据：`ftre/src/ftre/command/manager.py:128-134`。
+- **2026-08-08**：复验指令系统。当前后端仅注册 `/cancel`（系统级，handler 直接调 `agent.cancel_nowait()` + `task.cancel()`）与 `/compact`（普通级，handler 为 `AgentLoop._cmd_compact`），均在 `AgentLoop._register_commands()` 中注册（`agent/loop.py:138-167`）；`CommandManager.match()` 先于 handler 执行检查（`loop.py:341`），`_step_command` 命中后先持久化 `user_message` 再执行 handler（`loop.py:349-359`），与文档"指令拦截路径"描述一致；`/cancel` 的 `agent.cancel_nowait()` 行为（`agent/loop.py:148-154`）与文档"取消当前会话执行"语义一致。

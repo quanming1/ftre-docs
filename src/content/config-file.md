@@ -94,7 +94,7 @@ ftre 的配置分两层：
 
 ## default_workspace
 
-全局默认工作区路径。创建新 session 时作为预填值写入 session 的 `workspace` 字段。不配置时回退到进程 cwd。
+全局默认工作区路径。`POST /api/sessions` 创建 session 时不会自动写入该值（创建时 workspace 默认为空串），仅在 session 实际执行时（`AgentLoop._run_async()`）通过 `session.workspace or config.workspace or os.getcwd()` 兜底使用；不配置时直接回退到进程 cwd。
 
 > 此字段与 `agent.config.json` 的 `workspace` 是不同概念。`agent.config.json` 的 `workspace` 是 Agent 的家目录（存放 SOUL/AGENTS/USER.md 的路径），不参与 session 的 cwd 决定。session 运行时 cwd 优先级链：`session.workspace`（DB）→ `config.default_workspace` → `os.getcwd()`。
 
@@ -112,10 +112,11 @@ ftre 的配置分两层：
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `precompactThreshold` | number | `0.5` | 触发水位：`estimated_tokens / context_window ≥ 此值` 时后台准备摘要 |
-| `compactThreshold` | number | `0.6` | 启用压缩水位：达到此值时启用已准备的摘要 |
-| `consolidationRatio` | number | `0.5` | 压缩目标占可用输入预算比例 |
-| `safetyBuffer` | number | `1024` | 给估算误差和输出预留的安全余量 |
+| `precompactThreshold` | number | `0.5` | 触发水位：`estimated_tokens / context_window ≥ 此值` 时后台 / 用户输入路径触发压缩。`should_compact()` 的默认阈值虽为 `compact_threshold`，但所有调用方（`_step_compact`、`CompactManager.maybe_schedule_idle_compact`）都显式传入 `precompact_threshold` |
+| `compactThreshold` | number | `0.6` | 历史"启用压缩水位"字段；当前实际触发路径统一用 `precompact_threshold`，该字段仅作为压缩事件 `enable_ratio` 元数据写入 DB，不参与触发判断 |
+| `threshold` | 别名 | 同 `compactThreshold` | 旧字段名，等价于 `compactThreshold` |
+| `consolidationRatio` | number | `0.5` | 压缩目标占可用输入预算比例；当前 `_run_compact_llm()` 直接 LLM 直调摘要不以此做硬截断，仅作为预留字段 |
+| `safetyBuffer` | number | `1024` | 给估算误差和输出预留的安全余量；同上预留字段，未参与实际计算 |
 | `idleCompaction` | bool | `true` | 是否在 `done` 后后台异步压缩 |
 | `silent` | bool | `true` | 压缩事件是否标记 silent（前端不渲染气泡） |
 
@@ -263,3 +264,8 @@ Agent 目录下可创建 `skills/` 子目录，存放该 Agent 专属的 Skill �
 
 - **合并规则**：全局 Skill 和当前 Agent 私有 Skill 合并展示；同名 Skill 私有版本覆盖全局
 - **加载顺序**：`loadSkill` 工具先搜私有目录，再搜全局目录
+
+## 校对记录
+
+- **2026-08-08**：复验 config 加载逻辑。当前 `ftre/src/ftre/config.py` 的 `load_config()` 实现：默认 LLM（provider / model）从 `~/.ftre/agents/default/agent.config.json` 读取（`_read_default_agent_llm`，`config.py:36-59`），`title_generation` / `compact_generation` 解析为 `AgentConfig.title_llm` / `compact_llm`（`config.py:262-283`），与本文档"默认 LLM 不在 `config.json` 配置，由 `agent.config.json` 持有"一致；`agents.context` 的字段解析（`config.py:288-306`）支持 camelCase（如 `precompactThreshold`）和 snake_case（如 `precompact_threshold`），并提供 `threshold` 别名（兼容旧 `compact_threshold`），与"兼容策略"章节描述一致；`load_gateway_address()` 从 `servers.gateway` 读 host/port，缺省 `127.0.0.1:48650`（`config.py:154-166`），与"servers 字段"表一致；`disabled_skills` 由 `skill_plugin.py:68-84` 读取，`agent_id` 维度由 `agent.config.json` 整体替换（`skill_plugin.py:91-104`），与本文档"整体替换全局值"一致。
+- **2026-08-08**：`mtime` 缓存：当前 `load_config()` 用 `_last_config` + `_last_sig`（`config.py:138-139`）做缓存，签名跟踪 `config.json` + `default agent config` 的 mtime（`config.py:222-237`），与本文档"修改 `config.json` 后无需重启即可生效"一致；插件配置仅在启动时注入一次（`main.py:161` 调用 `plugin_manager.load_all(config_data)`），与"插件配置只在启动时注入一次，修改 `plugins[]` 需重启"一致。

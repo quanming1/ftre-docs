@@ -133,7 +133,7 @@ chat store 在处理 WS 事件时使用 30ms 微批处理窗口：
 - **volatile buffer 只缓存 `assistant_message`（流式快照）**：所有持久化事件（`assistant_message_complete` / `tool_result` / `user_message` / `done` 等）在 `loop.py` 中先入库后发 WS，不进 buffer。attach 时 buffer 最多只有 1 条当前正在输出的 `assistant_message`
 - `assistant_message_complete` 到达时清除 buffer 中的 `assistant_message`（自己不进 buffer，因为已入库）
 - `done` / `error` / `retry` 到达时整体清空 buffer
-- **`tool_result` 跨来源匹配**：HTTP 加载的 `assistant_message_complete`（含 toolCall，status=running）和 WS live 推送的 `tool_result` 写入同一个 `b.messages` 数组。`tool_result` 通过 `data.id`（即 `call_xxx`）从后往前遍历 `b.messages` 找到匹配的 toolCall，更新 status 为 ok/error。无论 toolCall 来自 HTTP 历史还是 WS live，都能匹配
+- **`tool_result` 跨来源匹配**：HTTP 加载的 `assistant_message_complete`（含 toolCall，status=running）和 WS live 推送的 `tool_result` 写入同一个 `b.messages` 数组。`tool_result` 通过 `data.id`（即 `call_xxx`）从后往前遍历 `b.messages` 找到匹配的 toolCall，按 `!!d.error` 写入 `status` 为 `"completed"` 或 `"error"`（前端不读取 `d.status`，因此 `status="cancelled"` + `error=null` 的取消结果会被映射为 `"completed"`）。无论 toolCall 来自 HTTP 历史还是 WS live，都能匹配
 - replay 帧和 HTTP 已加载的帧可能重叠，靠 `event_id` 去重
 - `assistant_message` 携带完整累积 content[]，前端 `buildFromContent()` 全量替换当前消息的 parts/toolCalls
 - `ensure()` 只在尾部没有 streaming assistant 时创建新消息；已封口的消息不会被复用

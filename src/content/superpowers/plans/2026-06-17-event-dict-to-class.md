@@ -1,6 +1,6 @@
 # Event Dict → Class 改造计划
 
-> **历史计划**：本改造已落地。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 已使用 `@dataclass` 类体系，但实际子类为 12 个（含 `UserMessageEvent`、`AssistantMessageEvent`、`AssistantMessageCompleteEvent` 等），且 `message`/`message_complete` 已重命名为 `assistant_message`/`assistant_message_complete`。本文档保留为设计演化参考，具体实现请以当前源码为准。
+> **历史计划**：本改造已落地。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 已使用 `@dataclass` 类体系，实际子类为 7 个（`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `DoneEvent` / `ErrorEvent` / `RetryEvent` / `UserMessageEvent`），且 `message`/`message_complete` 已重命名为 `assistant_message`/`assistant_message_complete`。本文档保留为设计演化参考，具体实现请以当前源码为准。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -529,6 +529,11 @@ if (event.type === "usage_update") {
 git add packages/renderer/src/stores/chat.ts
 git commit -m "chore: 确认前端 usage_update 解析兼容 Event class 序列化"
 ```
+
+## 校对记录
+
+- **2026-08-08**：本文是历史计划记录。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py` 已使用 `@dataclass` 类体系（`AgentEvent` 基类 + 7 个子类：`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `DoneEvent` / `ErrorEvent` / `RetryEvent` / `UserMessageEvent`），且 `message` / `message_complete` 已重命名为 `assistant_message` / `assistant_message_complete`（见 `event.py:16-23` 的 `EventType` 枚举）。本文档中描述的 `MessageEvent` / `MessageCompleteEvent` / `ToolCallEvent` / `ReasoningEvent` / `ReasoningCompleteEvent` / `ToolCallStreamingEvent` / `UsageUpdateEvent` 等类在当前代码中均不存在（已合并到 `AssistantMessageCompleteEvent` 的 `content[]` / `metadata` 字段中）。本文档保留为设计演化参考，具体实现请以当前源码为准。
+- **2026-08-08**：`BusMessage.data` 当前始终存 `dict`（在 `loop.py` 的 `out = BusMessage(..., data=event.to_dict(), ...)` 处序列化，`agent/loop.py:621`），未实现本文档 Task 3 Step 3 提到的"`BusMessage.data` 存 class 实例"方案——选了"`loop.py` 在赋值时调 `to_dict()`"的最小改动路线。
 
 ---
 

@@ -100,3 +100,7 @@ cd E:\binn\ftre-desktop
 git add packages/renderer/src/features/chat/ChatView.tsx
 git commit -m "feat: ChatInput 悬浮模式 — 消息可滚到输入框下方"
 ```
+
+## 校对记录
+
+- **2026-08-08**：本文是历史计划记录。当前 `ftre-desktop/packages/renderer/src/features/chat/ChatView.tsx` 中 `ChatMessageList` 使用 `pb-[180px]` 底部 padding（与本文档 Task 1 Step 1 的 `pb-[140px]` 略有差异——当前实际值更大，覆盖 180px 附件栏 + 工具栏），`ChatInput` 通过 `absolute bottom-0 left-0 right-0` 悬浮在消息列表上方，只读 Channel 提示同样采用绝对定位；本文档保留为设计演化参考，具体实现请以当前源码为准。

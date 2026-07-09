@@ -172,7 +172,7 @@
 | `session_id` | string | 目标 Session ID，即后端 `BusMessage.to_session`；普通 session 消息为具体 session_id，全局广播为 `"*"` |
 | `frame_id` | string | 由 `ws_channel.send()` 写入，等于 `BusMessage.id`（uuid4 hex 前 16 位）。客户端常用来匹配上行请求的回包 |
 
-> **关于 `event_id`**：AgentEvent 的稳定事件 ID 不在 metadata 字段里，而是位于 `data.data.event_id`（`agent_event` wrapper 内层 `data.type` 同级）。core 创建 `AgentEvent` 时生成（`uuid.uuid4().hex[:16]`），DB 历史记录同步写入 `messages.data.event_id`；前端 reducer 用它统一去重 HTTP history、WS live、WS replay；同一个事件从不同路径到达时只渲染一次。旧历史行没有 `event_id` 时，gateway 启动迁移会用 `messages.id` 回填（`session/manager.py:_migrate_backfill_message_event_id`）。
+> **关于 `event_id`**：AgentEvent 的稳定事件 ID 不在 metadata 字段里，而是位于 `data.event_id`（`agent_event` wrapper 的内层 `data` 字典中，与 `data.type` 同级）。core 创建 `AgentEvent` 时生成（`uuid.uuid4().hex[:16]`），DB 历史记录同步写入 `messages.data.event_id`；前端 reducer 用它统一去重 HTTP history、WS live、WS replay；同一个事件从不同路径到达时只渲染一次。旧历史行没有 `event_id` 时，gateway 启动迁移会用 `messages.id` 回填（`session/manager.py:_migrate_backfill_message_event_id`）。
 
 > **注意区分 `frame_id` 和 `event_id`**：`frame_id` 是 WS 帧 ID，仅用于 `user_message` echo 去重（前端自己发的消息不再渲染第二次）；`event_id` 是事件 ID，用于所有事件的统一去重（HTTP / WS live / WS replay 三路）。两者职责不同，不可混用。
 
@@ -297,8 +297,8 @@
 | `metadata` | object | 工具附加元数据。`react_runner` 当前调用 `tool_result_event()` 时已传入 `metadata=result.metadata or None`（`react_runner.py:737`），所以该字段会出现在事件中。文件编辑类工具（`edit` / `write`）会返回 `(result_str, diff_metadata)` 元组把 diff 信息填入 metadata，供前端渲染文件变更预览；其他工具不主动填充 metadata |
 
 **前端处理**：
-- 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"ok"` / `"error"`），同时更新 `name`（`d.name || tc.name`，优先使用事件中的 name）
-- **注意**：前端当前用 `!!d.error` 判断 `"ok"` / `"error"`，不读取 `d.status` 字段。后端在取消路径（`status="cancelled"` + `error=null`）和部分中断路径（`status="failed"` + `error=null`）下，前端会将 `status` 错误映射为 `"ok"`
+- 从 `toolCalls[]` 中找到对应 ID，写入 `result` + 更新 `status`（`"completed"` / `"error"`），同时更新 `name`（`d.name || tc.name`，优先使用事件中的 name）
+- **注意**：前端当前用 `!!d.error` 判断 `"completed"` / `"error"`，不读取 `d.status` 字段。后端在取消路径（`status="cancelled"` + `error=null`）和部分中断路径（`status="failed"` + `error=null`）下，前端会将这些状态映射为 `"completed"`（因为 `error=null`）
 
 #### tool_cancel_requested / tool_cancelled
 
@@ -401,7 +401,7 @@
 **前端处理**：
 - `sealStreamingPart()` 封口末尾仍在 streaming 的 text/reasoning part（`assistant_message_complete` 已封口大部分，`done` 兜底处理异常路径）
 - 设置 `streaming = false`
-- 当前前端会将仍处于 running/pending 的 toolCalls 标记为 `"ok"`
+- 当前前端 `done` case 不会主动重写仍在 running / pending 的 toolCalls 状态；它们若没有匹配的 `tool_result` 事件到达会保持原样，由 UI 自行判断超时展示
 - 清空 `retryState`
 - `isBusy` 的实际切换由紧随其后的 `session_status(idle)` 全局事件负责
 
@@ -756,14 +756,21 @@
 
  - **2025-06-26**：与 `ftre/src/ftre/channel/ws_channel.py` / `ftre-agent-core/.../websocket-client.ts` / `ftre/src/ftre/api/routes.py` 核对，描述准确。
    - WS 默认地址 `ws://127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致；
-    - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:525`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:559`；
-    - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:519-537`）；
-   - 前端 `websocket-client.ts:223-229` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
-    - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（常量 `channel/ws_channel.py:36-46`，校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py:248-288`）；
+    - 隐式 attach 行为（`user_message` / `cancel` 帧）由 `ws_channel._on_message` 实现：cancel 帧的 `_attach` 调用在 `channel/ws_channel.py:487`，user_message 帧的 `_attach` 调用在 `channel/ws_channel.py:521`；
+    - `cancel` 帧被 ws_channel 转为 `content="/cancel"` 的 `user_message`（`channel/ws_channel.py:481-499`）；
+   - 前端 `websocket-client.ts` 中 `sendCancel()` 已改为直接发送 `type: "user_message"` + `content: "/cancel"`；
+    - 附件校验规则：MIME 白名单（`image/png` / `image/jpeg` / `image/webp` / `image/gif`）、单张 ≤ 3 MB、单条 ≤ 8 张（校验函数 `_validate_attachments` 定义在 `channel/ws_channel.py`）；
    - 前端 ChatHeader 的「归档会话」菜单仍存在，调用 `triggerCompaction()` → `POST /api/sessions/{id}/compact`，但后端 `routes.py` 没有该路由，因此该菜单实际不生效；可靠的手动压缩入口仍是发送 `/compact` 指令。
- - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py:465-475`。
+ - **2025-07-18**：补全 HTTP API 路由表中缺失的 `GET /api/image-file` 路由。源码依据：`ftre/src/ftre/api/routes.py` 对应 handler 定义处。
 - **2026-07-01**：修正 Volatile Replay Buffer 描述。`VOLATILE_EVENT_TYPES = {assistant_message, reasoning, tool_call_streaming, context_compact_start}` 只缓存流式事件；稳定事件（`assistant_message_complete` / `tool_result` / `context_compact_done` 等）通过 `VOLATILE_CLEAR_BY_TYPE` 触发清理而非进入 buffer。
 - **2026-07-19**：行号复验。所有关键事实与源码一致。
 - **2026-07-20**：协议改造。`assistant_message_complete` 的 `content` 从 `str` 改为 `list[dict]`（含 text/thinking/toolCall，每个块带 `event_id`），新增 `metadata`（含 `kind` / `usage` / `stopReason` / `model` / `responseId`，无 `provider` / `error` 字段）；删除 `reasoning_complete` / `tool_call` / `usage_update` 三个独立事件（已合并）；`VOLATILE_CLEAR_BY_TYPE` 中 `assistant_message_complete` 清理集改为 `{assistant_message, reasoning, tool_call_streaming}`；`done` 事件去掉 `usage` 字段。
-- **2026-07-21**：删除 `reasoning` / `tool_call_streaming` 事件类型及 `ReasoningEvent` / `ToolCallStreamingEvent` 类。`assistant_message` 的 `content` 从 `str`（单 chunk）改为 `list[dict]`（完整累积快照）。Volatile buffer 简化：`VOLATILE_EVENT_TYPES = {assistant_message, context_compact_start}`，持久化事件（`assistant_message_complete` / `tool_result` 等）不进 buffer，`assistant_message_complete` 到达时清除 `assistant_message` 且自身不进 buffer。`VOLATILE_CLEAR_BY_TYPE` 中 `assistant_message_complete` 的清理集由上一条记录的 `{assistant_message, reasoning, tool_call_streaming}` 收窄为 `{assistant_message}`（与 `channel/ws_channel.py:59-63` 当前实现一致）。`assistant_message` 的 streaming part 不携带 `event_id`（event_id 只在 `_build_complete_events()` 产出 `assistant_message_complete` 时统一写入）；`StepFinish` 实际携带 `finish_reason` / `usage` / `response_metadata` 三字段，原 2026-07-20 记录遗漏 `response_metadata`。
+- **2026-07-21**：删除 `reasoning` / `tool_call_streaming` 事件类型及 `ReasoningEvent` / `ToolCallStreamingEvent` 类。`assistant_message` 的 `content` 从 `str`（单 chunk）改为 `list[dict]`（完整累积快照）。Volatile buffer 简化：`VOLATILE_EVENT_TYPES = {assistant_message, context_compact_start}`，持久化事件（`assistant_message_complete` / `tool_result` 等）不进 buffer，`assistant_message_complete` 到达时清除 `assistant_message` 且自身不进 buffer。`VOLATILE_CLEAR_BY_TYPE` 中 `assistant_message_complete` 的清理集由上一条记录的 `{assistant_message, reasoning, tool_call_streaming}` 收窄为 `{assistant_message}`（与 `channel/ws_channel.py` 当前实现一致）。`assistant_message` 的 streaming part 不携带 `event_id`（event_id 只在 `_build_complete_events()` 产出 `assistant_message_complete` 时统一写入）；`StepFinish` 实际携带 `finish_reason` / `usage` / `response_metadata` 三字段，原 2026-07-20 记录遗漏 `response_metadata`。
 - **2026-07-22**：WS 帧 JSON 顶层 `"id"` 字段更名为 `"frame_id"`，消除与 `"event_id"` 的命名混淆。涉及 `ws_channel.py`（序列化/反序列化）、`websocket-client.ts`（`ServerMessage.id` → `frame_id`）、`chat.ts`（`BusEvent.id` → `frameId`）。
+- **2026-07-08**：修正 `event_id` 路径描述。原文称位于 `data.data.event_id`（`agent_event` wrapper 内层 `data.type` 同级），实际 `event_id` 位于 `data.event_id`（`agent_event` wrapper 内层 `data` 字典中，与 `data.type` 同级）。已同步修正第 175 行的描述。
+- **2026-08-08**：复验 WS 协议关键路径。
+  - `attach` / `detach` 帧在 `ws_channel.py:470-479` 处理：attach 时调用 `self._volatile_replay.replay(session_id, ws)`（`ws_channel.py:474`）补发未入库的流式片段，detach 时只清理本地索引（`ws_channel.py:477-479`）；两端均为 fire-and-forget，与文档"attach / detach 无确认响应"描述一致。
+  - `user_message` 帧在 `ws_channel.py:502-532` 处理：先校验 `attachments`（`ws_channel.py:511` 调 `_validate_attachments`，`ws_channel.py:193-233`），通过后 `_persist_attachments` 把 base64 data 落盘到 `~/.ftre/assets/images/`（`ws_channel.py:236-264`），再 `_attach` 隐式注册 ws 到 session（`ws_channel.py:521`），把 `frame_id` 写入 `metadata.frame_id`（`ws_channel.py:528-530`），最后调 `self.receive(session_id, data, metadata, kind="user_message")`；与文档"行为流程"5 步描述一致。
+  - `cancel` 帧在 `ws_channel.py:483-500` 处理：转为 `content="/cancel"` 的 `user_message`，由 `_dispatch` 锁外的 `/cancel` 系统级指令执行（`agent/loop.py:148-154`）；与文档"`cancel` 帧的处理"描述一致。
+  - `_VolatileReplayBuffer`（`ws_channel.py:78-191`）：`VOLATILE_EVENT_TYPES = {assistant_message, context_compact_start}`（`ws_channel.py:53-56`），`VOLATILE_CLEAR_BY_TYPE` 中 `assistant_message_complete` 清理 `{assistant_message}`、`context_compact_done` / `context_compact_failed` 清理 `{context_compact_start}`（`ws_channel.py:59-63`），`VOLATILE_CLEAR_ALL_TYPES = {done, error, retry}`（`ws_channel.py:65`）；与文档"Volatile Replay Buffer"描述一致。
+  - 下行帧 `metadata` 字段（`ws_channel.py:347-356`）：`channel_id` / `session_id` / `frame_id` 三字段与 `BusMessage` 对应字段同步，文档"下行帧 metadata 字段"表格描述准确。

@@ -164,7 +164,7 @@ LLM 一轮输出的**完整消息**。chunk 累积完毕后统一发出，`conte
 | `name` | string | 工具名称 |
 | `result` | string | 执行结果 |
 | `error` | string \| null | null 表示成功 |
-| `status` | string | 当前运行时实际会出现 `"completed"` / `"failed"` / `"cancelled"`；`"timed_out"` 当前未在 `ToolResult` 或 `tool_result_event()` 中实现。**注意**：前端当前用 `!!d.error` 判断 ok/error，不读取 `d.status`；取消/中断路径下可能出现 `status="cancelled"` 且 `error=null`，前端会将其映射为 `"ok"`，因此客户端若需要区分取消状态应优先读取 `status` |
+| `status` | string | 当前运行时实际会出现 `"completed"` / `"failed"` / `"cancelled"`；`"timed_out"` 当前未在 `ToolResult` 或 `tool_result_event()` 中实现。**注意**：前端当前用 `!!d.error` 判断 `"completed"` / `"error"`，不读取 `d.status`；取消/中断路径下可能出现 `status="cancelled"` 且 `error=null`，前端会将其映射为 `"completed"`，因此客户端若需要区分取消状态应优先读取 `status` |
 | `error_code` | string \| null | 错误码（`react_runner` 调用 `tool_result_event()` 时未传入此参数，默认为 `null`） |
 | `metadata` | object \| undefined | 工具附加元数据。仅文件编辑类工具（`edit` / `write`）会填充此字段，携带 diff 信息供前端渲染文件变更预览。其他工具不产出此字段。详见下表 |
 
@@ -471,3 +471,13 @@ _user_message 到达 AgentLoop_
 ### 工具参数解析失败
 
 当 LLM 返回的 `tool_call.function.arguments` JSON 解析失败，但该工具调用仍有有效 `id` 和 `name` 时，仍然会嵌入 `assistant_message_complete.content[]` 的 toolCall 块（`arguments` 为空对象 `{}`），同时产出 `tool_result(status="failed")`。`name` 保留模型返回的原始 `tool_call.function.name`。如果缺少有效 `id` 或 `name`，该工具调用会在 accumulator finalize 阶段被跳过，不会进入后续工具执行阶段。
+
+## 校对记录
+
+- **2025-06-26**：与 `ftre-agent-core/src/ftre_agent_core/agent/event.py` / `ftre/src/ftre/agent/loop.py` 核对，描述准确。
+  - 7 个 `AgentEvent` 子类（`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `DoneEvent` / `ErrorEvent` / `RetryEvent` / `UserMessageEvent`）与 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举及 `:116-237` 的 dataclass 定义一致；
+  - `assistant_message_complete` 的 `metadata` 字段（`kind` / `usage` / `stopReason` / `model` / `responseId`）与 `AssistantMessageCompleteData` TypedDict 一致；当前 `EventType` 枚举只含 7 个值（`TOOL_RESULT` / `ASSISTANT_MESSAGE` / `ASSISTANT_MESSAGE_COMPLETE` / `ERROR` / `RETRY` / `DONE` / `USER_MESSAGE`），旧的 `REASONING` / `REASONING_COMPLETE` / `TOOL_CALL` / `TOOL_CALL_STREAMING` / `USAGE_UPDATE` 等独立事件类型已删除（合并到 `assistant_message_complete` 的 `content[]` 与 `metadata`）；
+  - `agent_message` / `user_message` 的 `content` 字段当前为 `list[dict]`（文本 / 思考 / 工具参数块），与 `AssistantMessageData` / `UserMessageEvent.content` 一致；流式 `assistant_message` 的 part 不携带 `event_id`（`react_runner._build_complete_events()` 在 `assistant_message_complete` 阶段统一写入），与 `loop.py:608-614` 的 `_PERSISTENT_CLASSES` 持久化逻辑一致；
+  - `UserMessageEvent` 的 `metadata.hide=true` 机制与 `event.py:223` 默认值 `{"hide": True}` 一致。
+- **2026-07-20**：协议改造。`_PERSISTENT_CLASSES` 删除 `ReasoningCompleteEvent` / `ToolCallEvent` / `UsageUpdateEvent`（已合并到 `AssistantMessageCompleteEvent`）；`assistant_message_complete` 新增 `metadata.kind`（`"block"` / `"final"`）区分中间块与最终回复；streaming 的 `assistant_message` 携带累积的完整 `content[]` 而非单 chunk 字符串。
+- **2026-08-08**：复验事件类。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举值为 `tool_result` / `assistant_message` / `assistant_message_complete` / `error` / `retry` / `done` / `user_message` 共 7 个，与本文档层次图一致；`AssistantMessageEvent.content` 类型为 `list[dict]`（`event.py:145`），与文档"content[] 累积到当前为止的完整内容"一致；`AssistantMessageCompleteEvent._data_dict` 返回 `{"content": ..., "metadata": ...}`（`event.py:171`），与文档字段表一致。

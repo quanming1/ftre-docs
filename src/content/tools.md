@@ -1,6 +1,6 @@
 # 内置工具
 
-ftre 内置 8 个工具，定义在 `src/ftre/tools/` 下。`build_default_tools()` 在 `agent_manager._build_agent()` 中被调用，按当前 Agent 配置构建 `ToolRegistry`，再由 `filter_tools()` 按 `tools.allow` / `tools.deny` 裁剪后传给 `ReActAgent`。
+ftre 内置 8 个工具，定义在 `src/ftre/tools/` 下。`build_default_tools()` 在 `agent_manager.create_agent()` 中被调用，按当前 Agent 配置构建 `ToolRegistry`，再由 `filter_tools()` 按 `tools.allow` / `tools.deny` 裁剪后传给 `ReActAgent`。
 
 工具基类 `Tool`、注册表 `ToolRegistry` 和执行器 `ToolHandler` 在 `ftre-agent-core` 中定义。
 
@@ -9,7 +9,7 @@ ftre 内置 8 个工具，定义在 `src/ftre/tools/` 下。`build_default_tools
 ## 架构总览
 
 ```
-agent_manager._build_agent()
+agent_manager.create_agent()
   │
   ├─ build_default_tools(channel_manager, tool_registry, llm_config)
   │     ├─ 注册 6 个核心工具：bash / read / write / edit / set_workspace / cron
@@ -228,11 +228,12 @@ LLM 一次返回多个 tool_calls 时，`spawn()` 为每个调用创建 `asyncio
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `action` | string | 是 | `create` / `delete` / `list` |
-| `cron` | string | create 时必填 | cron 表达式（如 `*/5 * * * *`） |
-| `prompt` | string | create 时必填 | 触发时投递给 Agent 的提示词 |
-| `title` | string | 否 | 任务标题 |
-| `job_id` | string | delete 时必填 | 任务 ID |
+| `action` | string | 是 | `create` / `list` / `delete` / `update` |
+| `cron` | string | create 时必填 / update 时可选 | cron 表达式（如 `*/5 * * * *`） |
+| `prompt` | string | create 时必填 / update 时可选 | 触发时投递给 Agent 的提示词 |
+| `title` | string | 否 | 任务标题（create/update 时可选；其他 action 忽略） |
+| `job_id` | string | delete/update 时必填 | 任务 ID |
+| `disabled` | boolean | 否 | `true` 时调度器跳过该任务（保留任务定义和历史，可随时启用）；`create` / `update` 均可设置 |
 
 任务存储在 `~/.ftre/cron/<job_id>.json`。`CronScheduler` 每 30 秒扫描目录，对到期任务生成 `user_message` 投递到独立 cron session 中执行。`CronChannel` 是静默通道，outbound 不推送，但 `ChannelManager` 会将 `to_channel="cron"` 的 outbound 镜像到 ws channel，已 attach 的前端可收到事件。
 
@@ -389,16 +390,27 @@ subagent 内禁止调用。禁止发给当前 session 自己。
 - **2026-07-08**：与 `ftre/src/ftre/tools/` 和 `ftre-agent-core/src/ftre_agent_core/tool/` 源码核对，首次创建。
   - 8 个内置工具（bash / read / write / edit / set_workspace / cron / task / send_message）与 `tools/__init__.py:build_default_tools()` 注册列表一致；
   - `Tool` 基类三种定义方式、`Injected` 依赖注入、`ToolRegistry` 接口与 `ftre-agent-core/tool/base.py` 和 `registry.py` 一致；
-  - `ToolHandler.run_one()` 支持 `str` / `AgentEvent` / `tuple[str, dict]` 三种返回值，与 `tool_handler.py:107-113` 一致；
+  - `ToolHandler.run_one()` 支持 `str` / `AgentEvent` / `tuple[str, dict]` 三种返回值，与 `tool_handler.py` 对应分支一致；
   - `WorkspaceAccessor.get()/set()` 通过 `run_coroutine_threadsafe` 同步读写 DB，与 `_workspace.py` 一致；
-  - `edit` / `write` 返回 `(result_str, diff_metadata)` 元组，`build_diff_metadata()` 用 `difflib.unified_diff` 生成 diff，与 `_diff.py` 和 `edit.py:88,119` / `write.py:52` 一致；
+  - `edit` / `write` 返回 `(result_str, diff_metadata)` 元组，`build_diff_metadata()` 用 `difflib.unified_diff` 生成 diff，与 `_diff.py` 和 `edit.py` / `write.py` 对应 return 行一致；
   - `bash` 的纯 cd 拦截、RTK 重写、semble 集成、平台提示与 `bash.py` 一致；
   - `read` 的三分支（图片/目录/文本）、编码检测、大文件保护、图片压缩与 `read.py` 一致；
-  - `filter_tools()` 按 `allow/deny` 原地过滤，与 `__init__.py:21-45` 一致；
-  - `react_runner` 在 `tool_result_event()` 中传入 `metadata=result.metadata`，与 `react_runner.py:737` 一致。
+  - `filter_tools()` 按 `allow/deny` 原地过滤，与 `__init__.py` 对应实现一致；
+  - `react_runner` 在 `tool_result_event()` 中传入 `metadata=result.metadata`，与 `react_runner.py` 对应分支一致。
 - **2026-07-08**：前端展示章节补充。
-  - `InlineToolCallCard` 对 read/edit/write 的交互逻辑：成功 + 有 metadata → 点击整行打开 Inspector；失败/无 metadata → 回退 inline 展开。与 `InlineToolCallCard.tsx:360-400` 一致。
+  - `InlineToolCallCard` 对 read/edit/write 的交互逻辑：成功 + 有 metadata → 点击整行打开 Inspector；失败/无 metadata → 回退 inline 展开。与 `InlineToolCallCard.tsx` 对应分支一致。
   - `InspectorTab.content` 字段：来自 `openFilePreview` 的第 5 参数（read metadata.content），`FilePreviewContent` 优先用 snapshotFile 渲染，与 `inspector.ts` 和 `InspectorPanel.tsx` 一致。
-  - edit 行展示 `+N -M`（additions 绿色 / deletions 红色），不再用 Check 图标；hover 字体变色无背景色。与 `InlineToolCallCard.tsx:505-521` 一致。
-  - `INSPECTOR_WIDTH_MAX` 从 800 改为 9999，无实际上限，与 `layout.ts:25` 一致。
-  - `read` 工具 metadata schema（file/content/start_line/end_line）与 `read.py:218-229` 一致（之前误用 `content` 变量名，已修正为 `tf.text`）。
+  - edit 行展示 `+N -M`（additions 绿色 / deletions 红色），不再用 Check 图标；hover 字体变色无背景色。与 `InlineToolCallCard.tsx` 对应渲染分支一致。
+  - `INSPECTOR_WIDTH_MAX` 从 800 改为 9999，无实际上限，与 `layout.ts` 常量定义一致。
+  - `read` 工具 metadata schema（file/content/start_line/end_line）与 `read.py` 对应 snapshot_meta 构造一致（之前误用 `content` 变量名，已修正为 `tf.text`）。
+- **2026-07-08**：`build_default_tools()` 的调用位置从 `agent_manager._build_agent()` 修正为 `agent_manager.create_agent()`（源码中无 `_build_agent` 方法，`loop.py:510` 调用 `self.agent_manager.create_agent(...)`）。
+- **2026-08-08**：复验 8 个内置工具与文档描述的一致性。
+  - `bash`（`tools/bash.py`）：纯 cd 拦截（`workspace.set` 路径）、RTK 重写、subprocess 平台分支（Windows `cmd /c` / POSIX `/bin/bash -c`）、输出截断 20000 字符、输出包裹 `<FTRE_SYSTEM_FACT>` 标签，与本文档"工作原理"章节一致。
+  - `read`（`tools/read.py`）：三分支（图片 / 目录 / 文本），编码检测顺序（`tools/_io.py`）、大文件保护 256KB、图片压缩阈值 5MB + 4096px 缩放（`read.py:19-20`），与文档"三分支"表格一致。
+  - `write` / `edit`（`tools/write.py` / `tools/edit.py`）：保留原 encoding 和换行风格（CRLF/LF），返回 `(result_str, diff_metadata)` 元组，`build_diff_metadata` 用 `difflib.unified_diff`（`tools/_diff.py`），与文档"Diff Metadata"章节一致。
+  - `set_workspace`（`tools/set_workspace.py`）：写入 session DB `workspace` 字段，与文档"set_workspace 切换工作区"一致。
+  - `cron`（`tools/cron.py`）：工具支持 `create` / `list` / `delete` / `update` 四种 action（`cron.py:286-306` 的 update 分支），任务存储在 `~/.ftre/cron/<job_id>.json`，调度器 30 秒扫描一次（`cron.py:117`），与本文档"cron 工具"表格描述整体一致；`cron` 工具的 `ToolParameter` 定义（`cron.py:314-319`）含 `disabled` 字段（文档参数表第 236 行已声明），`enum=["create", "list", "delete", "update"]` 与文档第 230 行的 4 种 action 列表完全对齐；之前的 2026-07-22 校对记录中"参数表只列了 create / list / delete 三种 action（缺 update）"是当时文档未补全时的历史快照，本轮复核确认文档已与源码一致，无须再补充。
+  - `task`（`tools/task.py`）：派发 subagent，30 秒启动超时 + 600 秒执行超时，subagent channel 内禁止再调 `task`；与文档"task 派发子任务"章节一致。
+  - `send_message`（`tools/send_message.py`）：支持 `notify` / `invoke` 两种 kind，subagent 内禁止调用，禁止发给当前 session 自己；与文档"send_message 跨 session 消息"章节一致。
+  - `ToolRegistry.register()` 仍为直接覆盖（`self._tools[name] = tool`），同名工具静默覆盖不抛 `ValueError`；`ToolHandler.run_one()` 仍支持 `str` / `AgentEvent` / `tuple[str, dict]` 三种返回值类型，与文档"ToolHandler"章节一致。
+  - `WorkspaceAccessor.get()` / `set()` 仍通过 `asyncio.run_coroutine_threadsafe` 抛回主事件循环（`tools/_workspace.py`），与文档"WorkspaceAccessor"章节一致。

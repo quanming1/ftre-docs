@@ -68,7 +68,8 @@ pnpm dev
   - `py -m pip install -e .` 安装 `E:\ftre-agent-core` 与 `E:\ftre` 两个仓库的步骤与各自 `pyproject.toml` 一致；`ftre` 入口通过 `[project.scripts] ftre = "ftre.main:main"` 注册；
   - `ftre gateway` 与 `ftre/src/ftre/main.py:201-208` 一致；
   - WebSocket 监听 `127.0.0.1:48650/` 与 `config.json` 的 `servers.gateway` 一致（缺省值 `48650`）；
-  - HTTP API 监听 `http://127.0.0.1:48650/api/`（`/api` 前缀在 `ws_channel.py:349,354` 注入）；
+  - HTTP API 监听 `http://127.0.0.1:48650/api/`（`/api` 前缀在 `ws_channel.py:294,299` 注入）；
   - `requires-python = ">=3.11"` 与两个 `pyproject.toml` 一致；当前工作区通常使用 Python 3.12；
   - 前端 dev 服务由 `E:\binn\ftre-desktop\scripts\dev.mjs` 启动，端口由 `resolveFrontendPort()` 从 `~/.ftre/config.json` 的 `servers.frontend.port` 读取并通过 `FTRE_FRONTEND_PORT` 环境变量注入 `packages/renderer/vite.config.ts`；
   - `ftre-agent-core` 源码直接使用 `openai.AsyncOpenAI`（`llm/completion.py:272`），其 `pyproject.toml` 只声明 `litellm` 依赖；但 `litellm` 自身依赖 `openai`（`litellm 1.82.6` 的 `Requires` 列表包含 `openai`），因此安装 `litellm` 后 `openai` 包自动安装，不存在依赖缺失问题。正文已据此说明。
+- **2026-08-08**：复验启动链路。当前 `ftre/src/ftre/main.py:209-219` 的 `main()` 入口仅支持 `gateway` 子命令，与文档"用法: ftre gateway"一致；`run_gateway()`（`main.py:102-201`）按 SessionManager → EventBus → ChannelManager → HookManager → ToolRegistry → CommandManager → PluginManager → AgentManager 顺序构建组件，调用 `plugin_manager.load_all(config_data)` 加载插件（`main.py:161`），注册 ws / subagent Channel（`main.py:168-171`），启动 `AgentLoop`（`main.py:174-184`）和 `ChannelManager.start()`（`main.py:188`），最后启动 `CronScheduler`（`main.py:191-194`），与文档"启动后端"章节的链路描述一致。`config.py:154-166` 的 `load_gateway_address()` 与 `ws_channel.py:269-270` 的 `WebSocketChannel(host, port)` 调用贯通，host/port 完全由 `config.json` 的 `servers.gateway` 控制。

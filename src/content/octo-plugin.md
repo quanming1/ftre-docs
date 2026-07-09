@@ -282,3 +282,7 @@ ruff check .
 bandit -r . -ll
 vulture . --min-confidence 80
 ```
+
+## 校对记录
+
+- **2026-08-08**：本文档描述 Octo Channel 插件的架构、@ 检测门控、历史消息注入、上下文注入（XML 标签）、Agent 管理工具、消息发送行为等。文档涉及的源码（`_channel.py` / `_api.py` / `_mention.py` / `_tools.py` / `_plugin.py`）位于独立仓库 `quanming1/ftre-octo-plugin`，本地路径 `~/.ftre/plugins/octo_plugin/`，与本文档"加载机制"一致；本仓库 `ftre-agent-core` / `ftre` / `ftre-desktop` 不直接引用 Octo 插件代码（仅在 `PluginManager` 通用加载路径中按子目录自动发现），因此本节描述无法直接对照本工作区源码核对；本文档主要面向 Octo 插件维护者，使用时应以其独立仓库的当前代码为准。

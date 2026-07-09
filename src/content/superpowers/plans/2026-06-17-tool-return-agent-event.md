@@ -568,3 +568,8 @@ cd E:\ftre && start.bat
 ```bash
 git add -A && git commit -m "fix: 端到端验证修复"
 ```
+
+## 校对记录
+
+- **2026-08-08**：本文是历史计划记录。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py:215-240` 已定义 `UserMessageEvent`（含 `metadata: dict = field(default_factory=lambda: {"hide": True})`），`_from_type` 分支处理 `USER_MESSAGE`（`event.py:310-314`），`user_message_event()` 构造函数（`event.py:366-370`）和 `to_openai_message()`（`event.py:228-237`，含 `image_file` → `image_url` base64 转换）均已实现；`ftre/src/ftre/agent/loop.py:411-417` 的 `_PERSISTENT_CLASSES` 已包含 `UserMessageEvent`；`session/manager.py:664-678` 的 `to_openai_messages` 在 `user_message` 分支处理附件并调用 `normalize_user_content`（不再走本文档 Task 5 Step 2 描述的 `_flush_tool_calls()` / `_take_reasoning()` 路径，因为新协议下 `assistant_message_complete` 的 `content[]` 已直读）。
+- **2026-08-08**：本文档 Task 4 描述的独立 `see_img` 工具未被实现——`ftre/src/ftre/tools/` 目录下没有 `see_img.py`（`tools/` 目录只含 `bash.py` / `read.py` / `write.py` / `edit.py` / `set_workspace.py` / `cron.py` / `task.py` / `send_message.py` 共 8 个工具）；图片读取能力已合并进 `tools/read.py`（`read.py:58-63` 的 `_is_image_path` + `read.py:88-127` 的 `_compress_image`），通过路径后缀或 HTTP URL 自动走图片分支，返回 `UserMessageEvent(content=[image_file])`（`metadata.hide=true`）。本文档保留为设计演化参考，具体实现请以当前源码为准。
