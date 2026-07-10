@@ -1,6 +1,16 @@
 # Agent 事件协议
 
-Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（`isinstance` 检查 + 属性访问），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "event_id": "<id>", "data": { ... }}` 走线传输；Gateway 入库时会把同一个 `event_id` 写入 `messages.data.event_id`，用于前端统一去重 HTTP history、WS live 和 WS replay。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
+Agent 运行时（`ReActRunner`）在执行过程中产出的一系列事件。内部为 `@dataclass` 类实例（`isinstance` 检查 + 属性访问），通过 `to_dict()` 序列化为 `{"type": "<EventType>", "event_id": "<id>", "timestamp": <float>, "turn_id": "<id>", "data": { ... }}` 走线传输；Gateway 入库时会把同一个 `event_id` 写入 `messages.data.event_id`，用于前端统一去重 HTTP history、WS live 和 WS replay。由 `ReActAgent.run()` 的 AsyncGenerator 逐条 yield。
+
+顶层字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | `string` | EventType 枚举值 |
+| `event_id` | `string` | 事件唯一标识（16 位 hex，自动生成） |
+| `timestamp` | `float` | 事件创建时间戳（Unix 秒，自动生成）；与 DB `messages.timestamp` 列对齐，确保 WS live 和 HTTP history 时间一致 |
+| `turn_id` | `string` | 所属 Turn 的唯一标识（`turn_` + 12 位 hex）；空串不出现在序列化中。由 `RunState.start()` 生成，`run()` 中统一盖戳到所有事件 |
+| `data` | `object` | 事件负载，子类通过 `_data_dict()` 提供 |
 
 本页主要描述 core `ReActAgent` 事件；`AgentLoop`、命令、压缩与工具层注入的扩展事件会在相应章节单独说明。
 
@@ -11,13 +21,12 @@ AgentEvent (基类 @dataclass)
  ├─ ToolResultEvent              — type = "tool_result"
  ├─ AssistantMessageEvent        — type = "assistant_message"
  ├─ AssistantMessageCompleteEvent — type = "assistant_message_complete"
- ├─ ErrorEvent                   — type = "error"
+ ├─ StepEvent                    — type = "step"
  ├─ RetryEvent                   — type = "retry"
- ├─ DoneEvent                    — type = "done"
  └─ UserMessageEvent             — type = "user_message"
 ```
 
-> `EventType` 枚举（`ftre-agent-core/src/ftre_agent_core/agent/event.py`）当前只含上述 7 个值。文本 / 推理 / 工具参数三类流式片段统一通过 `assistant_message` 事件携带的 `content[]` 快照对外输出（`react_runner._emit_streaming()` 始终 yield `assistant_message`，把 `text` / `thinking` / `toolCall` 三类 part 一起打包）。
+> `EventType` 枚举当前含 6 个值。文本 / 推理 / 工具参数三类流式片段统一通过 `assistant_message` 事件携带的 `content[]` 快照对外输出。
 
 每个子类字段与下表 data 字段一一对应（如 `ToolResultEvent.tool_id` 对应 `data.id`）。
 
@@ -28,10 +37,9 @@ AgentEvent (基类 @dataclass)
 | `assistant_message` | 流式 assistant 消息快照（`content[]` 累积到当前为止的完整内容，含 text / thinking / toolCall） | 每次 LLM 输出增量（text / reasoning / toolCall 参数片段） |
 | `assistant_message_complete` | LLM 一轮完整消息（含 text / thinking / toolCall，对齐 OpenAI message 格式） | 流式收束 / 工具调用前 |
 | `tool_result` | 工具执行结果 | 工具执行完成 |
-| `user_message` | 工具注入的 user message | Tool 返回 AgentEvent 时（LLM 可见，前端隐藏） |
+| `user_message` | 用户输入消息或工具注入的 user message | 用户发送消息 / Tool 返回 AgentEvent 时 |
 | `retry` | LLM 重试 | 遇到可重试错误时 |
-| `error` | Agent 错误 | LLM 调用失败（不可重试/重试耗尽） |
-| `done` | 执行结束 | 正常完成 / 错误 / 取消 / 超迭代 |
+| `step` | Turn 生命周期事件（`turn_start` / `turn_end`） | Turn 开始 / 结束（正常完成 / 错误 / 取消 / 超迭代） |
 
 > **注意**：`session_status` 不在此列。它不是 `ReActAgent` 产出的事件，而是 `AgentLoop` 在 session 进入 / 退出活跃态时注入的全局广播事件，使用顶层 `type: "global_event"`、`to_channel="*"` / `to_session="*"` 扇出给所有连接。详见 [WebSocket 协议 — 全局广播事件](/docs/ws-protocol) 与 [Bus 消息协议](/docs/bus-message)。
 
@@ -240,49 +248,74 @@ LLM 调用遇到**可重试错误**（网络/超时/限流等），准备重试�
 
 **产生**：`react_runner` 捕获到可重试异常时产出，在 `error` 之前。如果重试耗尽，最后产出 `error` 事件。
 
-### error
+### step
 
-LLM 调用失败且**不可重试**或重试耗尽。
+统一的 Turn 生命周期事件，替代旧 `DoneEvent` + `ErrorEvent`。通过 `phase` 字段区分阶段。
+
+#### turn_start
+
+Turn 开始（ephemeral，不持久化到 DB）。
 
 ```json
 {
-  "type": "error",
+  "type": "step",
   "event_id": "<16-hex>",
+  "timestamp": 1720612345.67,
+  "turn_id": "turn_abc123def456",
   "data": {
-    "message": "API 余额不足",
-    "code": "bad_request"
+    "phase": "turn_start"
   }
 }
 ```
 
-| data 字段 | 类型 | 说明 |
-|-----------|------|------|
-| `message` | string | 错误描述 |
-| `code` | string | 错误码（`auth_error` / `bad_request` / `rate_limit` / `timeout` / `api_error` / `unknown`） |
+#### turn_end
 
-**产生**：`react_runner` 捕获到不可重试异常或重试耗尽时产出。`error` 事件之后会产出 `done(success=false, reason="error")`。
-
-### done
-
-执行结束。
+Turn 结束（持久化）。`reason` 标识结束原因：
 
 ```json
 {
-  "type": "done",
+  "type": "step",
   "event_id": "<16-hex>",
+  "timestamp": 1720612350.12,
+  "turn_id": "turn_abc123def456",
   "data": {
+    "phase": "turn_end",
     "success": true,
-    "reason": "completed"
+    "reason": "completed",
+    "iterations": 3
   }
 }
 ```
 
-| data 字段 | 类型 | 说明 |
-|-----------|------|------|
-| `success` | boolean | 是否成功完成 |
-| `reason` | string | `"completed"` / `"max_iterations"` / `"error"` / `"cancelled"` |
+错误结束时携带 `error_message` / `error_code`：
 
-> Token 用量不再通过 `done` 事件传递，而是在 `assistant_message_complete.metadata.usage` 中。
+```json
+{
+  "type": "step",
+  "event_id": "<16-hex>",
+  "timestamp": 1720612350.12,
+  "turn_id": "turn_abc123def456",
+  "data": {
+    "phase": "turn_end",
+    "success": false,
+    "reason": "error",
+    "iterations": 1,
+    "error_message": "Rate limit exceeded",
+    "error_code": "rate_limit"
+  }
+}
+```
+
+| data 字段 | 类型 | phase=turn_start | phase=turn_end | 说明 |
+|-----------|------|:---:|:---:|------|
+| `phase` | `string` | ✅ | ✅ | `"turn_start"` / `"turn_end"` |
+| `success` | `boolean` | — | ✅ | Turn 是否成功 |
+| `reason` | `string` | — | ✅ | `"completed"` / `"max_iterations"` / `"cancelled"` / `"error"` |
+| `iterations` | `int` | — | ✅ | 本 Turn 总 LLM 迭代数 |
+| `error_message` | `string` | — | reason=error 时 | 错误描述 |
+| `error_code` | `string` | — | reason=error 时 | 错误码 |
+
+> 旧 `done` + `error` 事件已删除，统一为 `step` 事件。`reason="error"` 时 `error_message`/`error_code` 携带错误详情。
 
 ### user_message
 
@@ -313,6 +346,9 @@ LLM 调用失败且**不可重试**或重试耗尽。
 ```
 _user_message 到达 AgentLoop_
   │
+  ├─ step (phase=turn_start)           ← Turn 开始
+  ├─ user_message                      ← 用户输入（Gateway 持久化 + echo）
+  │
   ├─ _loop() 开始
   │   │
   │   ├─ _stream_turn() 第 1 轮（有工具调用）
@@ -328,7 +364,7 @@ _user_message 到达 AgentLoop_
   │   │   │   ├─ assistant_message  (chunk 1)
   │   │   │   └─ assistant_message  (chunk 2)
   │   │   ├─ assistant_message_complete     (content=[text], metadata={kind:"final", usage, stopReason:"stop"})
-  │   │   └─ done (success=true, reason="completed")
+  │   │   └─ step (phase=turn_end, success=true, reason="completed", iterations=2)
   │   │
   │   └─ _loop() 结束
   │
@@ -364,17 +400,17 @@ _user_message 到达 AgentLoop_
   [流式 chunk: assistant_message × N（content[] 累积 text parts）]
   assistant_message_complete  ← content=[text:"已完成：查询到余额 $1323.93..."]
                                 metadata={usage:{total:4037}, kind:"final", stopReason:"stop"}
-  done                        ← success=true reason=completed
+  step                        ← phase=turn_end success=true reason=completed iterations=4
 ```
 
 ## Agent 的退出路径
 
-| 路径 | done.reason | done.success | 触发条件 |
+| 路径 | step.reason | step.success | 触发条件 |
 |------|------------|:---:|------|
 | 正常完成 | `"completed"` | true | 模型不再调用工具，直接输出最终回答 |
 | 超出迭代 | `"max_iterations"` | false | 达到 `max_iterations` 上限 |
-| 错误 | `"error"` | false | LLM 调用失败且不可重试/重试耗尽 |
-| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 系统级指令，或前端 `cancel` 帧被转为 `/cancel` 后触发 `agent.cancel_nowait()` + `task.cancel()`，Agent 在 LLM stream 的 await 处抛出 `CancelledError`；若取消直接由 `AgentLoop` 捕获，则由 `AgentLoop` 补发 outbound `done(cancelled)` |
+| 错误 | `"error"` | false | LLM 调用失败且不可重试/重试耗尽；`error_message` / `error_code` 携带错误详情 |
+| 取消 | `"cancelled"` | false | 用户发送 `/cancel` 系统级指令，或前端 `cancel` 帧被转为 `/cancel` 后触发 `agent.cancel_nowait()` + `task.cancel()`，Agent 在 LLM stream 的 await 处抛出 `CancelledError`；若取消直接由 `AgentLoop` 捕获，则由 `AgentLoop` 补发 outbound `step(turn_end, cancelled)` |
 
 ---
 
@@ -475,9 +511,10 @@ _user_message 到达 AgentLoop_
 ## 校对记录
 
 - **2025-06-26**：与 `ftre-agent-core/src/ftre_agent_core/agent/event.py` / `ftre/src/ftre/agent/loop.py` 核对，描述准确。
-  - 7 个 `AgentEvent` 子类（`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `DoneEvent` / `ErrorEvent` / `RetryEvent` / `UserMessageEvent`）与 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举及 `:116-237` 的 dataclass 定义一致；
+  - 6 个 `AgentEvent` 子类（`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `StepEvent` / `RetryEvent` / `UserMessageEvent`）与 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举及 `:116-237` 的 dataclass 定义一致；
   - `assistant_message_complete` 的 `metadata` 字段（`kind` / `usage` / `stopReason` / `model` / `responseId`）与 `AssistantMessageCompleteData` TypedDict 一致；当前 `EventType` 枚举只含 7 个值（`TOOL_RESULT` / `ASSISTANT_MESSAGE` / `ASSISTANT_MESSAGE_COMPLETE` / `ERROR` / `RETRY` / `DONE` / `USER_MESSAGE`），旧的 `REASONING` / `REASONING_COMPLETE` / `TOOL_CALL` / `TOOL_CALL_STREAMING` / `USAGE_UPDATE` 等独立事件类型已删除（合并到 `assistant_message_complete` 的 `content[]` 与 `metadata`）；
   - `agent_message` / `user_message` 的 `content` 字段当前为 `list[dict]`（文本 / 思考 / 工具参数块），与 `AssistantMessageData` / `UserMessageEvent.content` 一致；流式 `assistant_message` 的 part 不携带 `event_id`（`react_runner._build_complete_events()` 在 `assistant_message_complete` 阶段统一写入），与 `loop.py:608-614` 的 `_PERSISTENT_CLASSES` 持久化逻辑一致；
   - `UserMessageEvent` 的 `metadata.hide=true` 机制与 `event.py:223` 默认值 `{"hide": True}` 一致。
 - **2026-07-20**：协议改造。`_PERSISTENT_CLASSES` 删除 `ReasoningCompleteEvent` / `ToolCallEvent` / `UsageUpdateEvent`（已合并到 `AssistantMessageCompleteEvent`）；`assistant_message_complete` 新增 `metadata.kind`（`"block"` / `"final"`）区分中间块与最终回复；streaming 的 `assistant_message` 携带累积的完整 `content[]` 而非单 chunk 字符串。
-- **2026-08-08**：复验事件类。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举值为 `tool_result` / `assistant_message` / `assistant_message_complete` / `error` / `retry` / `done` / `user_message` 共 7 个，与本文档层次图一致；`AssistantMessageEvent.content` 类型为 `list[dict]`（`event.py:145`），与文档"content[] 累积到当前为止的完整内容"一致；`AssistantMessageCompleteEvent._data_dict` 返回 `{"content": ..., "metadata": ...}`（`event.py:171`），与文档字段表一致。
+- **2026-08-08**：复验事件类。当前 `ftre-agent-core/src/ftre_agent_core/agent/event.py:16-23` 的 `EventType` 枚举值为 `tool_result` / `assistant_message` / `assistant_message_complete` / `step` / `retry` / `user_message` 共 6 个（`DoneEvent` / `ErrorEvent` 已合并为 `StepEvent`），与本文档层次图一致；`AssistantMessageEvent.content` 类型为 `list[dict]`（`event.py:145`），与文档"content[] 累积到当前为止的完整内容"一致；`AssistantMessageCompleteEvent._data_dict` 返回 `{"content": ..., "metadata": ...}`（`event.py:171`），与文档字段表一致。
+- **2026-07-10**：协议改造。合并 `DoneEvent` + `ErrorEvent` 为统一 `StepEvent`（`type="step"`），通过 `phase` 字段区分 `turn_start` / `turn_end`；`reason="error"` 时携带 `error_message` / `error_code`。`AgentEvent` 顶层新增 `timestamp`（Unix 秒，自动生成，与 DB `messages.timestamp` 列对齐）和 `turn_id`（`turn_` + 12 位 hex，由 `RunState.start()` 生成并统一盖戳到所有事件）。`DoneEvent` / `ErrorEvent` / `EventType.DONE` / `EventType.ERROR` 彻底删除。`user_message` 改由 core `run()` 在 `turn_start` 之后 yield（通过 `runtime_context["user_input"]` 传入），Gateway 在 async for 中拦截并做持久化 + echo。所有 `StepEvent`（含 `turn_start`）均持久化到 DB。前端 `applyEvent` 新增 `step` case，删除 `done` / `error` case。`migrate_events.py` 整个文件删除。`ws_channel.VOLATILE_CLEAR_ALL_TYPES` 仅保留 `"step"` / `"retry"`。

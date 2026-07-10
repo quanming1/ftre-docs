@@ -158,7 +158,7 @@ def build_default_tools(..., llm_config=None):
 
 ### Agent 事件体系
 
-事件从裸 dict 迁移为 `@dataclass` 类（7 个子类：`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `DoneEvent` / `ErrorEvent` / `RetryEvent` / `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。
+事件从裸 dict 迁移为 `@dataclass` 类（6 个子类：`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `StepEvent` / `RetryEvent` / `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。
 
 ## 校对记录
 
@@ -168,11 +168,11 @@ def build_default_tools(..., llm_config=None):
   - `ChannelManager` 的 `MIRROR_TO_WS_CHANNELS = {"cron"}` 与 `ftre/src/ftre/channel/manager.py:13` 一致；
   - `CronScheduler` 默认 `scan_interval=30` 与 `ftre/src/ftre/tools/cron.py:117` 一致；`CronChannel` 在 `CronScheduler.__init__` 中通过 `channel_manager.register(CronChannel(bus))` 注册，与代码一致；
   - `AgentLoop` 的 Pipeline（command → compact → run）、`should_compact(threshold=precompact_threshold=0.5)` 的调用、`enable_pending_compact` 流程与 `ftre/src/ftre/agent/loop.py` 一致；
-   - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ToolResultEvent` / `DoneEvent` / `ErrorEvent` / `UserMessageEvent`，与 `loop.py` 一致；
+   - `_PERSISTENT_CLASSES` 中包含 `AssistantMessageCompleteEvent` / `ToolResultEvent` / `UserMessageEvent`，与 `loop.py` 一致；
    - `FtrePluginApi` 的属性（`command_manager`、`event_loop`、`tool_registry`、`register_channel` / `register_hook` / `register_router`）与 `ftre/src/ftre/plugin/plugin.py` 一致；`append_system_prompt` 已移除，插件通过 `BEFORE_AGENT_RUN` / `BEFORE_MESSAGES_BUILD` hook 注入 system prompt；
    - `MessagesBuildContext.event_loop` 字段当前未由 `_build_messages` 填充（始终 `None`），与 `ftre/src/ftre/agent/loop.py:743-754` 一致；
   - `CompactManager.should_compact / compact / enable_pending_compact / _notify` 均为全异步实现，直接 `await self.bus.publish_outbound(msg)`，与 `ftre/src/ftre/agent/compact_manager.py` 一致；
 - `read` 工具的图片分支（`read` 整合文本/图片/目录读取、>5MB 自动压缩、`UserMessageEvent(content=[image_file])`、`metadata.hide=true`）与代码一致；目录列举（`_list_dir`）在 `read.py:45-55` 实现，调用点在 `read.py:187-189`；
 - **2026-07-19**：行号复验。代码持续演进后偏移，所有关键行为仍与源码一致。
 - **2026-07-20**：协议改造。`_PERSISTENT_CLASSES` 删除 `ReasoningCompleteEvent` / `ToolCallEvent` / `UsageUpdateEvent`（已合并到 `AssistantMessageCompleteEvent`）；compact 调度触发从 `done / usage_update` 改为 `assistant_message_complete.metadata.usage`；`to_openai_messages()` 从 pending_* 缓冲逻辑简化为直读 `content[]`。
-- **2026-08-08**：复验 `_PERSISTENT_CLASSES` 实际内容。当前源码 `agent/loop.py:411-417` 定义为 `(AssistantMessageCompleteEvent, ToolResultEvent, DoneEvent, ErrorEvent, UserMessageEvent)`，与本文档 2025-06-26 校对记录一致；`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部 `_event_loop: Callable | None`，源码 `plugin/plugin.py:64-69`），`main.py:140` 在 `PluginManager` 构造时直接传入 `event_loop=lambda: event_loop`，与描述一致；`McpPlugin` / `SkillPlugin` 仍通过 `BEFORE_AGENT_RUN` hook + `append_to_first_system(ctx.messages, ...)` 注入 system prompt（`plugin/builtin/mcp_plugin.py:39,108`、`plugin/builtin/skill_plugin.py:49,65`），与描述一致；`ContextGovernPlugin` 仍通过 `BEFORE_MESSAGES_BUILD` hook 修改 `ctx.config.system_prompt`（`plugin/builtin/context_govern.py:64-112`），与描述一致。
+- **2026-08-08**：复验 `_PERSISTENT_CLASSES` 实际内容。当前源码 `agent/loop.py:411-415` 定义为 `(AssistantMessageCompleteEvent, ToolResultEvent, UserMessageEvent)`（`DoneEvent` / `ErrorEvent` 已合并为 `StepEvent`，不再持久化；`StepEvent` 由 `_run_async` 在 async for 循环中直接入库，不走 `_PERSISTENT_CLASSES` 白名单路径）；`FtrePluginApi.event_loop` 通过 `@property` 动态解析（内部 `_event_loop: Callable | None`，源码 `plugin/plugin.py:64-69`），`main.py:140` 在 `PluginManager` 构造时直接传入 `event_loop=lambda: event_loop`，与描述一致；`McpPlugin` / `SkillPlugin` 仍通过 `BEFORE_AGENT_RUN` hook + `append_to_first_system(ctx.messages, ...)` 注入 system prompt（`plugin/builtin/mcp_plugin.py:39,108`、`plugin/builtin/skill_plugin.py:49,65`），与描述一致；`ContextGovernPlugin` 仍通过 `BEFORE_MESSAGES_BUILD` hook 修改 `ctx.config.system_prompt`（`plugin/builtin/context_govern.py:64-112`），与描述一致。
