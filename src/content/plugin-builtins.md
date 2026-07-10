@@ -138,4 +138,4 @@ ftre 随代码仓库发布 4 个内置插件，位于 `src/ftre/plugin/builtin/`
   - `context_govern`（`plugin/builtin/context_govern.py:36-112`）：注册 `BEFORE_MESSAGES_BUILD` hook（`context_govern.py:41`），按孤立清理 / 去重 / 悬挂丢弃三步处理事件流（`context_govern.py:43-60`），注入 `agent_dir/AGENTS.md` + `workspace/AGENTS.md` 两份（`context_govern.py:64-112`），与本文档"修复能力"和"AGENTS.md 注入"章节一致。
   - `skill`（`plugin/builtin/skill_plugin.py:35-66`）：注册 `BEFORE_AGENT_RUN` hook（`skill_plugin.py:49`），通过 `append_to_first_system(ctx.messages, ...)` 注入 `<skill_desc>` 和 `<skill_list>` 两块（`skill_plugin.py:51-66`），同时注册 `loadSkill` 工具和 `/api/skills` router；与本文档"工作原理"章节一致。
   - `mcp`（`plugin/builtin/mcp_plugin.py:29-110`）：注册 `BEFORE_AGENT_RUN` hook（`mcp_plugin.py:39`），`append_to_first_system` 注入 `<mcp_desc>`（`mcp_plugin.py:108`），同时注册 `/api/mcp` router（`mcp_plugin.py:130-271`）和异步启动连接（`mcp_plugin.py:46-52`）；与本文档"工作原理"章节一致。
-  - `context_govern` 的 4 项 tool 事件治理（孤立 / 去重 / 悬挂）均通过 `assistant_message_complete.content[].toolCall` 提取 call id（`context_govern.py:22-33`），与协议改造后的事件结构匹配。
+  - `context_govern` 的 3 项 tool 事件治理（孤立 / 去重 / 悬挂）均通过 `assistant_message_complete.content[].toolCall` 提取 call id（`context_govern.py:22-33`），与协议改造后的事件结构匹配。

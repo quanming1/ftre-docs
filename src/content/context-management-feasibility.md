@@ -100,7 +100,7 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 ## 3. 简化后的流程
 
 ```
-一轮对话结束 → done / usage_update
+一轮对话结束 → assistant_message_complete（含 metadata.usage）
                     └─ 检查水位 ≥ precompact_threshold(0.5)
                         ├─ 是 → LLM 直调摘要 → 写 context_compact(enabled=true, silent=config.context.silent，默认 true)
                         └─ 否 → 不压
@@ -231,3 +231,4 @@ L1 prune 和 `to_openai_messages` 的 `context_compact` 处理逻辑不受影响
 - **2025-06-26**：作为历史方案记录保留，本文档描述的简化方向（删除 raw / subagent / 双阈值 / 升级机制等）与代码历史演进路径吻合。当前实现的真实情况已在 `context-management.md` 中详细说明，本文档不再作实现说明使用；
 - 文中列出的「需删代码约 260 行」「风险点：`raw_archive_chunk` 被 `_run_compact_llm` 复用」等条目，是历史分析时点的状态，已不反映当前实现；当前实现虽已简化为单一 LLM 直调摘要，但配置层仍保留 `precompact_threshold` 与 `compact_threshold` 两个字段，且 `compact_manager.py`（原 `compact_handler.py`，已重命名）的 `compact()` 方法 docstring 中仍保留了"60% 无 pending 时"的旧说法（实际位置在 `compact_manager.py:224-229` 的 docstring 中），实际调用路径应以 `context-management.md` 中按源码核对后的描述为准；
 - 本次校对已补充上述说明，避免把当前源码中的历史注释误读为真实运行逻辑。
+- **2026-07-09**：修正第 3 节流程图中的触发源描述。原文写 `done / usage_update`，但协议改造后 `usage_update` 已合并到 `assistant_message_complete`（嵌入 `metadata.usage`），实际触发源为 `assistant_message_complete`（含 `metadata.usage`）。已修正为 `assistant_message_complete（含 metadata.usage）`。
