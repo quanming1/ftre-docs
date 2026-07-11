@@ -392,6 +392,8 @@ ctx = await hook_manager.trigger("my_custom_point", ctx)
 
 > 所有 hook 均为异步执行。hook 函数可以是 `async def` 也可以是普通 `def`——`trigger` 会检测返回值是否为 coroutine 并自动 `await`。
 
+> **注意**：此处的 `HookManager` 是 Gateway 层的 filter chain，只能改写 ctx，不能阻止流程。如果你需要拦截 Agent 的停止行为、工具调用等 ReAct 循环内部决策，请使用 [Core Hook 系统](/docs/core-hooks)（`FtreCoreHookManager`），它支持 `block` 决策。
+
 ---
 
 ## Tool 创建方式

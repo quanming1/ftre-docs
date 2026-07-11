@@ -36,6 +36,9 @@
 │  │  ┌──────────────────────────┐ │   │
 │  │  │      ReActAgent          │ │   │
 │  │  │  (ftre-agent-core)       │ │   │
+│  │  │  ┌────────────────────┐  │ │   │
+│  │  │  │ FtreCoreHookManager│  │ │   │
+│  │  │  └────────────────────┘  │ │   │
 │  │  └──────────────────────────┘ │   │
 │  └───────────────────────────────┘   │
 │           │                          │
@@ -159,6 +162,12 @@ def build_default_tools(..., llm_config=None):
 ### Agent 事件体系
 
 事件从裸 dict 迁移为 `@dataclass` 类（6 个子类：`ToolResultEvent` / `AssistantMessageEvent` / `AssistantMessageCompleteEvent` / `StepEvent` / `RetryEvent` / `UserMessageEvent`）。内部用 `isinstance` + 属性访问，通过 `to_dict()` 序列化为 JSON。详见 [Agent 事件协议](/docs/agent-events)。
+
+### Core Hook 系统
+
+`ftre-agent-core` 内置的 Hook 系统（`FtreCoreHookManager`），让外部代码可以挂到 `ReActRunner` 的关键决策点上。与 Gateway 层的 `HookManager`（filter chain，只能改写 ctx）不同，Core Hook 支持 `block` 决策——可以**阻止 Agent 停止**。
+
+5 个挂点：`on_turn_start`（迭代开始前注入消息）、`on_stop`（★ 阻止 Agent 停止）、`on_turn_end`（迭代结束后只读观察）、`on_pre_tool`（工具执行前拦截/改参数）、`on_post_tool`（工具执行后改结果）。其中 `on_turn_start` / `on_stop` / `on_turn_end` 已集成到 `ReActRunner`，`on_pre_tool` / `on_post_tool` 类型已定义待集成。详见 [Core Hook 系统](/docs/core-hooks)。
 
 ## 校对记录
 
