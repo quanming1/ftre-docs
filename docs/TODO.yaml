@@ -1,0 +1,50 @@
+# ftre-docs 开发任务清单
+# 状态图例：done 已完成 · in_progress 进行中 · todo 未开始
+# PRD 驱动：每个阶段开工前先写 PRD（docs/prd/PRD-<阶段>-<名称>.md），流程见 docs/PROCESS.md。
+# 消费方：.githooks/check_commit_msg.py 校验 feat/fix 的 scope 阶段标识真实存在。
+
+meta:
+  project: ftre-docs
+  status_legend:
+    done: 已完成
+    in_progress: 进行中
+    todo: 未开始
+
+stages:
+  - id: A
+    name: 文档站
+    steps:
+      - id: A1
+        title: 脚手架（React + Vite + 自动侧边栏）
+        status: done
+        date: 2026-08-12
+        prd: docs/prd/PRD-A1-scaffold.md
+        prd_status: 已验收
+        modules:
+          - React + Vite 初始化
+          - Markdown 源文件在 src/content/
+          - 侧边栏自动渲染
+        acceptance: pnpm dev 启动文档站，侧边栏自动渲染
+
+      - id: A2
+        title: 内容结构（架构文档 + 交接笔记 + plan 文档）
+        status: done
+        date: 2026-08-12
+        prd: docs/prd/PRD-A2-content.md
+        prd_status: 已验收
+        modules:
+          - src/content/ 架构文档
+          - docs/superpowers/plans/ 设计计划文档
+          - 交接笔记（SessionLane、DeepSeek 等）
+        acceptance: 文档内容完整，侧边栏分类正确
+
+      - id: A3
+        title: 部署（GitHub Pages 自动部署）
+        status: done
+        date: 2026-08-12
+        prd: docs/prd/PRD-A3-deploy.md
+        prd_status: 已验收
+        modules:
+          - GitHub Actions 自动部署工作流
+          - base path 配置
+        acceptance: push 到 master 自动部署到 GitHub Pages
