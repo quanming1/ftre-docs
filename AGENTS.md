@@ -1,95 +1,71 @@
-# ftre-docs 项目开发规则（AGENTS.md）
+<project>
+文档站路径：E:\ftre-docs\
+后端路径：E:\ftre\（文档主题）
+定位：ftre 生态文档站（React + Vite），独立部署，不依赖后端
+内容源：src/content/（Markdown，侧边栏自动渲染）
+部署：GitHub Actions 自动部署到 GitHub Pages（push 到 master 触发）
+技术栈：React + Vite + TypeScript
 
-本文件是 ftre-docs 仓库对**所有 AI agent** 以及人类协作者的行为规范。
-任何人在本仓库动手前，必须完整阅读并遵守本文件；git 操作**强制遵循 Git Flow**（见 §3）。
+MANDATORY 首次进入本仓库先读 3 份文档，之后每次 commit 前重读第 1 份：
+1. docs/COMMIT.md — 提交规范唯一完整定义（type/scope/hook 机制）
+2. docs/PROCESS.md — PRD 驱动开发流程（六步闭环）
+3. docs/TODO.yaml — 阶段 id 唯一事实源（commit scope 校验依据）
+</project>
 
-## 1. 项目概况
+<git_flow MANDATORY>
 
-- **ftre-docs**：ftre 生态的文档站（React + Vite，独立部署，不依赖后端）
-- Markdown 源文件在 `src/content/`，侧边栏自动渲染
-- 部署：GitHub Actions 自动部署到 GitHub Pages（push 到 master 触发）
-- 关键文档：
-  - `docs/TODO.yaml` — 结构化 TODO 清单
-  - `docs/COMMIT.md` — 提交规范完整定义
-  - `docs/PROCESS.md` — PRD 驱动开发流程
-  - `docs/prd/` — 各阶段 PRD 文档
+<basic_discipline>
+- NEVER 私自 commit / push：除非用户明确要求（"commit"、"push"、"提交"），否则只改代码不提交
+- 回滚需确认：回滚前告知内容/范围/影响，得到确认后再执行
+- ALWAYS push 前先 commit
+- 跨仓库操作必须 set_workspace 显式切换：`cd A && git ...` 中的 cd 不改变 bash 工具工作区
+</basic_discipline>
 
-## 2. 工作方式
+<branch_model>
+master（仅发布，永不直接提交）← develop（默认基底）← feature/&lt;阶段id&gt;-&lt;name&gt; / prd-update / todos-update / release/&lt;ver&gt; / hotfix/&lt;name&gt;
 
-1. **严格按 `docs/TODO.yaml` 的阶段顺序推进**——每步只做该步清单内的任务。
-2. 动手前先读相关文档与现有结构，遵循已有模式与风格。
-3. 只改任务范围内的文件；不做用户没要求的额外改动。
+- 默认工作分支是 develop
+- NEVER 直接提交 master；NEVER 直接 commit 到 develop——develop 只接受 `feature/*` → `git merge --no-ff` 合入
+- MANDATORY feat/fix 分支名必须关联 TODO 阶段 id（如 feature/A2-content），提交 scope 与分支名阶段 id 必须一致（commit-msg hook 强制）
+</branch_model>
 
-## 3. Git Flow 规范（强制）
+<commit_format>
+`&lt;type&gt;(&lt;scope&gt;): &lt;subject&gt;`，subject 中文
+- type 白名单：feat / fix / prd / todos / docs / refactor / test / style / chore / perf
+- feat/fix/prd/todos 的 scope 必须是 docs/TODO.yaml 中真实存在的阶段 id
+- 其他 type 的 scope 用 .githooks/.scopes 白名单模块名（content/config/docs/deploy）
+- 一条提交只做一件事；NEVER 写 fix stuff / update / misc 这类无意义 message
+</commit_format>
 
-### 3.1 分支模型
+<merge_and_hooks>
+- feature/* → develop 用 --no-ff；develop → master 走 release/*；NEVER rebase 已推送历史
+- 本地强制：.githooks/commit-msg（提交校验）+ .githooks/pre-push（master 保护 + develop merge-only）
+- merge:/revert: 开头系统提交跳过
+- MANDATORY 首次在本仓库提交前，先完整阅读 docs/COMMIT.md（提交规范唯一完整定义，含 type/scope 规则与常见错误速查）
+- 标准流程：checkout develop → checkout -b feature/&lt;阶段id&gt;-&lt;task&gt; → 开发+测试 → commit → merge --no-ff → push develop
+</merge_and_hooks>
 
-```
-master            ← 仅存放发布版本（受保护语义：永不直接提交）
-  └─ develop      ← 日常集成分支（默认工作基底）
-       ├─ feature/<阶段id>-<name>   新功能 / 新任务
-       ├─ prd-update                PRD 文档专用分支
-       ├─ todos-update              TODO 文档专用分支
-       ├─ release/<ver>             发布准备
-       └─ hotfix/<name>             生产紧急修复
-```
+</git_flow>
 
-### 3.2 分支规则
+<prd_driven MANDATORY>
+- MANDATORY 首次在本仓库开工前，先完整阅读 docs/PROCESS.md（PRD 驱动流程六步闭环）
+- ALWAYS 先 PRD 后开发：TODO 阶段开工前先在 docs/prd/ 建 PRD（从 PRD-TEMPLATE.md 复制）并定稿 approved
+- PRD 是唯一依据：需求/实现/测试/验收全部对照 PRD；验收按 PRD「验收标准」逐条核对
+- 阶段 id 与状态见 docs/TODO.yaml（commit scope 的唯一事实源）
+</prd_driven>
 
-- 默认工作分支是 **develop**；master 永不直接提交代码；**develop 同样禁止直接提交，只接受 feature/* → merge 合入**（pre-push hook 强制）。
-- 每个任务/功能开独立分支：`git checkout -b feature/<阶段id>-<short-name> develop`，**feat/fix 分支名必须关联 TODO 阶段 id**（如 `feature/A2-content`，大小写不敏感）。
-- **交叉校验**：feat/fix 提交的 scope 必须与分支名中的阶段 id 一致（commit-msg hook 强制）。
-- 规划类专用分支：`prd-update`（PRD 文档提交）、`todos-update`（TODO 文档提交）。
+<architecture>
+- 内容组织：src/content/ 按主题分目录（架构文档 / 交接笔记 / plan 文档）
+- 侧边栏：根据 src/content/ 目录结构自动渲染
+- 部署：GitHub Actions workflow（.github/workflows/），push master 触发构建 + GitHub Pages 发布
+- 文档主题覆盖 ftre 生态 5 仓库：ftre 后端 / ftre-desktop / ftre-agent-core / ftre-docs / octo_plugin
+</architecture>
 
-### 3.3 提交规范（Conventional Commits）
-
-```
-<type>(<scope>): <subject>
-```
-
-- **subject 使用中文**（type/scope 保持英文）。
-- type：`feat` / `fix` / `prd` / `todos` / `docs` / `refactor` / `test` / `style` / `chore` / `perf`
-- **scope 分三类**：
-  - `feat` / `fix` / `prd` / `todos`：scope **必须**是 `docs/TODO.yaml` 中的阶段 id（如 `A1` / `A2`），且必须真实存在（commit-msg hook 实时校验）
-  - `prd` / `todos` 额外强制：只在 `prd-update` / `todos-update` 分支下提交，且暂存文件必须全部在 `docs/` 下
-  - 其他 type（docs/refactor/test/style/chore/perf）：scope 用模块名，白名单定义在 `.githooks/.scopes`（content/config/docs/deploy）
-- **一条提交只做一件事**；禁止 `fix stuff`、`update`、`misc` 这类无意义 message。
-- **本地强制**：`.githooks/commit-msg` hook 每次 commit 校验，不符合直接拒绝。
-- 提交规范完整定义见 `docs/COMMIT.md`。
-
-### 3.4 合并策略
-
-- `feature/*` → `develop`：**`git merge --no-ff feature/xxx`**（保留合并提交）。
-- **develop 只接受 merge 合入**：禁止直接 commit 到 develop（pre-push hook 校验）。
-- `develop` → `master`：走 `release/*`。
-- **禁止 rebase 重写已推送历史**。
-
-### 3.5 本地保护（hooks）
-
-- `.githooks/commit-msg`：提交时校验消息格式/type/scope/阶段 id/分支交叉
-- `.githooks/pre-push`：禁止非 master 分支 push 到 master、禁止删除 master、develop 新增提交必须全部是 merge commit
-- `merge:` / `Merge` / `revert:` / `Revert` 开头的系统提交自动跳过
-- hook 生效前提：`git config core.hooksPath .githooks`（新 clone 后执行一次）
-
-### 3.6 标准流程（每次任务）
-
-```bash
-git checkout develop && git pull          # 1. 同步基底
-git checkout -b feature/<阶段id>-<task>   # 2. 开任务分支
-git add <改动文件>                          # 3. 提交（conventional）
-git commit -m "docs(A1): 描述"
-git checkout develop && git merge --no-ff feature/<task>   # 4. 合并回 develop
-git push origin develop                   # 5. 推送
-```
-
-## 4. PRD 驱动开发（强制）
-
-- **先 PRD，后开发**：每个 TODO 阶段开工前，必须先创建对应 PRD（`docs/prd/PRD-<阶段>-<名称>.md`，从模板复制），定稿（`approved`）后才能开发。
-- **PRD 是开发的唯一依据**：需求、实现、测试、验收全部对照 PRD。
-- 推进管理办法详见 `docs/PROCESS.md`；阶段状态与阶段 id 见 `docs/TODO.yaml`。
-
-## 5. 禁止事项
-
-- 直接向 master 提交 / 推送代码。
-- 遗留临时文件、未使用的死代码。
-- 提交时夹带与任务无关的改动。
+<anti_lazy>
+- NEVER 用空函数、TODO、placeholder 假装完成
+- NEVER 重复性任务做几个就声称全部完成——逐个执行，验证全部
+- NEVER 跳过失败的步骤——修复后重新验证
+- 同一问题反复改不好就停下：回到初始假设、复现路径和失败证据重新判断，换方向
+- 收尾前通读改过的文件：确认连贯、无语法错误、无残留调试代码
+- 违反以上任何一条：下一轮立即自纠
+</anti_lazy>
